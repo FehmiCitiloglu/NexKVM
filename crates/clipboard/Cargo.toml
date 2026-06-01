@@ -20,6 +20,7 @@ compression = ["dep:flate2"]
 
 [dependencies]
 coklu-core.workspace = true
+coklu-crypto.workspace = true
 bytes.workspace = true
 async-trait.workspace = true
 serde.workspace = true

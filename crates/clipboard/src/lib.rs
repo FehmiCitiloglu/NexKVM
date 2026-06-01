@@ -35,14 +35,16 @@ mod cipher;
 mod compression;
 mod conflict;
 mod content;
+mod engine;
 mod history;
 mod sync;
 mod timeline;
 
-pub use cipher::{ClipboardCipher, PlaintextCipher};
+pub use cipher::{ClipboardCipher, PlaintextCipher, SessionClipboardCipher};
 pub use compression::{CompressionAlgorithm, CompressionPolicy, compress, decompress};
 pub use conflict::{ConflictResolver, InboundDecision, LocalDecision, OriginStamp};
 pub use content::{ClipboardContent, ClipboardFormat, ClipboardSnapshot, ContentFingerprint};
+pub use engine::ClipboardEngine;
 pub use history::{ClipboardHistory, HistoryConfig, HistoryEntry, SkipReason};
 pub use sync::{ClipboardSync, ClipboardUpdate};
 pub use timeline::{ClipboardRestorePlan, SharedClipboardTimeline, TimelineConfig, TimelineEntry};
