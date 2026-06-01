@@ -83,6 +83,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install NSIS
         run: choco install nsis -y
+      - name: Install ImageMagick
+        run: choco install imagemagick -y
       - name: Build Windows installer
         shell: pwsh
         run: ./scripts/package-windows.ps1

@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/target/package"
 APPDIR="$DIST/AppDir"
 VERSION="${COKLU_VERSION:-0.1.0}"
+LOGO_PNG="$ROOT/packaging/assets/coklu-logo.png"
 
 mkdir -p "$DIST"
 
@@ -24,9 +25,10 @@ cp "$ROOT/target/generate-rpm/coklu-${VERSION}-1.x86_64.rpm" "$DIST/coklu_${VERS
 
 echo "Building AppImage..."
 rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications"
+mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps"
 cp "$ROOT/target/release/coklu" "$APPDIR/usr/bin/coklu"
 cp "$ROOT/packaging/linux/coklu.desktop" "$APPDIR/usr/share/applications/coklu.desktop"
+cp "$LOGO_PNG" "$APPDIR/usr/share/icons/hicolor/512x512/apps/coklu.png"
 
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/usr/bin/env bash
@@ -35,12 +37,8 @@ exec "$HERE/usr/bin/coklu" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
-# 1x1 transparent PNG for AppImage icon requirements.
-base64 -d > "$APPDIR/coklu.png" <<'EOF'
-iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAJUbS6QAAAAASUVORK5CYII=
-EOF
 ln -sf usr/share/applications/coklu.desktop "$APPDIR/coklu.desktop"
-ln -sf coklu.png "$APPDIR/.DirIcon"
+ln -sf usr/share/icons/hicolor/512x512/apps/coklu.png "$APPDIR/.DirIcon"
 
 APPIMAGETOOL="$DIST/appimagetool.AppImage"
 if [[ ! -x "$APPIMAGETOOL" ]]; then

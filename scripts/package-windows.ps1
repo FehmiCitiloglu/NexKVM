@@ -8,6 +8,20 @@ Set-Location $root
 
 New-Item -ItemType Directory -Path target/package -Force | Out-Null
 
+$logoPng = Join-Path $root "packaging/assets/coklu-logo.png"
+$iconIco = Join-Path $root "packaging/windows/coklu.ico"
+
+if (-not (Test-Path $logoPng)) {
+  throw "Logo not found at $logoPng"
+}
+
+if (-not (Get-Command magick -ErrorAction SilentlyContinue)) {
+  throw "ImageMagick 'magick' not found. Install it (e.g. choco install imagemagick -y)."
+}
+
+Write-Host "Generating installer icon from logo..."
+magick convert $logoPng -background none -define icon:auto-resize=256,128,64,48,32,16 $iconIco
+
 Write-Host "Building release binary..."
 cargo build -p coklu --release
 

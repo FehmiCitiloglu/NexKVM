@@ -48,6 +48,8 @@ section = "utils"
 priority = "optional"
 assets = [
 	["../../target/release/coklu", "usr/bin/coklu", "755"],
+	["../../packaging/linux/coklu.desktop", "usr/share/applications/coklu.desktop", "644"],
+	["../../packaging/assets/coklu-logo.png", "usr/share/icons/hicolor/512x512/apps/coklu.png", "644"],
 	["../../README.md", "usr/share/doc/coklu/README.md", "644"],
 ]
 
@@ -56,5 +58,7 @@ summary = "Cross-platform device continuity daemon"
 release = "1"
 assets = [
 	{ source = "../../target/release/coklu", dest = "/usr/bin/coklu", mode = "755" },
+	{ source = "../../packaging/linux/coklu.desktop", dest = "/usr/share/applications/coklu.desktop", mode = "644" },
+	{ source = "../../packaging/assets/coklu-logo.png", dest = "/usr/share/icons/hicolor/512x512/apps/coklu.png", mode = "644" },
 	{ source = "../../README.md", dest = "/usr/share/doc/coklu/README.md", mode = "644", doc = true },
 ]
