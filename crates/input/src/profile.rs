@@ -11,6 +11,7 @@ use coklu_core::identity::DeviceId;
 use serde::{Deserialize, Serialize};
 
 use crate::acceleration::SmartCursorAcceleration;
+use crate::keyboard::ModifierState;
 use crate::mode::InputProfile;
 
 /// Keyboard layout applied when routing keyboard input to a specific device.
@@ -42,6 +43,115 @@ impl Default for KeyboardLayout {
     }
 }
 
+/// A keyboard chord: a non-modifier key plus the modifiers held with it.
+///
+/// `keycode` is the **USB HID usage ID** of the triggering key (the same
+/// cross-platform-neutral convention the wire format and
+/// [`Modifier`](crate::Modifier) use), and must itself be a non-modifier key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hotkey {
+    /// Modifiers that must be held for the chord to match.
+    pub modifiers: ModifierState,
+    /// HID usage ID of the non-modifier key.
+    pub keycode: u32,
+}
+
+impl Hotkey {
+    /// Build a chord from explicit modifiers and a key.
+    #[must_use]
+    pub fn new(modifiers: ModifierState, keycode: u32) -> Self {
+        Self { modifiers, keycode }
+    }
+}
+
+/// What a per-device [`Hotkey`] does when matched.
+///
+/// The input crate only resolves the *intent*; the daemon interprets it against
+/// live state (quick-switch order, active mode, command runtime).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HotkeyAction {
+    /// Cycle quick-switch focus to the next device.
+    SwitchNext,
+    /// Cycle quick-switch focus to the previous device.
+    SwitchPrevious,
+    /// Switch focus directly to a specific device.
+    SwitchTo(DeviceId),
+    /// Toggle the pointer mode (e.g. absolute ↔ raw) for the target.
+    TogglePointerMode,
+    /// Run a named command resolved by the daemon's command runtime.
+    Command(String),
+}
+
+/// A single `(chord → action)` binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotkeyBinding {
+    /// The chord that triggers this binding.
+    pub hotkey: Hotkey,
+    /// The action to perform.
+    pub action: HotkeyAction,
+}
+
+/// Per-device hotkey mapping.
+///
+/// Backed by a small `Vec` rather than a `HashMap`: bindings number in the
+/// handful, linear lookup is cache-friendly at that size, and it serializes as
+/// a plain sequence (so it survives non-string-key formats like TOML).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotkeyMap {
+    bindings: Vec<HotkeyBinding>,
+}
+
+impl HotkeyMap {
+    /// Create an empty map.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Bind `hotkey` to `action`, replacing any existing binding for the same
+    /// chord. Returns the previous action, if any.
+    pub fn bind(&mut self, hotkey: Hotkey, action: HotkeyAction) -> Option<HotkeyAction> {
+        if let Some(existing) = self.bindings.iter_mut().find(|b| b.hotkey == hotkey) {
+            Some(std::mem::replace(&mut existing.action, action))
+        } else {
+            self.bindings.push(HotkeyBinding { hotkey, action });
+            None
+        }
+    }
+
+    /// Remove the binding for `hotkey`. Returns the action that was bound.
+    pub fn unbind(&mut self, hotkey: &Hotkey) -> Option<HotkeyAction> {
+        let index = self.bindings.iter().position(|b| &b.hotkey == hotkey)?;
+        Some(self.bindings.remove(index).action)
+    }
+
+    /// Resolve the action bound to `hotkey`, if any.
+    #[must_use]
+    pub fn resolve(&self, hotkey: &Hotkey) -> Option<&HotkeyAction> {
+        self.bindings
+            .iter()
+            .find(|b| &b.hotkey == hotkey)
+            .map(|b| &b.action)
+    }
+
+    /// Whether no bindings are present.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+
+    /// Number of bindings.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bindings.len()
+    }
+
+    /// Iterate over the bindings.
+    pub fn iter(&self) -> impl Iterator<Item = &HotkeyBinding> {
+        self.bindings.iter()
+    }
+}
+
 /// Complete per-device UX profile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceUxProfile {
@@ -51,6 +161,9 @@ pub struct DeviceUxProfile {
     pub keyboard: KeyboardLayout,
     /// Smart cursor acceleration for relative pointer deltas.
     pub acceleration: SmartCursorAcceleration,
+    /// Per-device hotkey mapping.
+    #[serde(default)]
+    pub hotkeys: HotkeyMap,
 }
 
 impl DeviceUxProfile {
@@ -61,6 +174,7 @@ impl DeviceUxProfile {
             input: InputProfile::desktop(),
             keyboard: KeyboardLayout::default(),
             acceleration: SmartCursorAcceleration::desktop_default(),
+            hotkeys: HotkeyMap::new(),
         }
     }
 
@@ -71,6 +185,7 @@ impl DeviceUxProfile {
             input: InputProfile::gaming(),
             keyboard: KeyboardLayout::default(),
             acceleration: SmartCursorAcceleration::disabled(),
+            hotkeys: HotkeyMap::new(),
         }
     }
 }
@@ -126,6 +241,18 @@ impl DeviceProfileStore {
     #[must_use]
     pub fn keyboard_for(&self, device: DeviceId) -> &KeyboardLayout {
         &self.profile_for(device).keyboard
+    }
+
+    /// Resolve the hotkey map for a target device.
+    #[must_use]
+    pub fn hotkeys_for(&self, device: DeviceId) -> &HotkeyMap {
+        &self.profile_for(device).hotkeys
+    }
+
+    /// Resolve the action a chord triggers for a target device, if bound.
+    #[must_use]
+    pub fn resolve_hotkey(&self, device: DeviceId, hotkey: &Hotkey) -> Option<&HotkeyAction> {
+        self.profile_for(device).hotkeys.resolve(hotkey)
     }
 }
 
@@ -235,6 +362,58 @@ mod tests {
         };
         store.set_profile(device, profile);
         assert_eq!(store.keyboard_for(device).layout, "azerty");
+    }
+
+    #[test]
+    fn per_device_hotkey_is_resolved_and_rebound() {
+        let device = DeviceId::generate();
+        let chord = Hotkey::new(
+            ModifierState {
+                meta: true,
+                ..Default::default()
+            },
+            0x2B, // HID Tab
+        );
+
+        let mut profile = DeviceUxProfile::desktop();
+        assert!(
+            profile
+                .hotkeys
+                .bind(chord.clone(), HotkeyAction::SwitchNext)
+                .is_none()
+        );
+        // Rebinding the same chord returns the previous action.
+        assert_eq!(
+            profile
+                .hotkeys
+                .bind(chord.clone(), HotkeyAction::SwitchPrevious),
+            Some(HotkeyAction::SwitchNext)
+        );
+
+        let mut store = DeviceProfileStore::new();
+        store.set_profile(device, profile);
+
+        assert_eq!(
+            store.resolve_hotkey(device, &chord),
+            Some(&HotkeyAction::SwitchPrevious)
+        );
+        // Unknown device falls back to the (empty) default profile.
+        let other = DeviceId::generate();
+        assert!(store.resolve_hotkey(other, &chord).is_none());
+    }
+
+    #[test]
+    fn hotkey_map_unbind_removes_binding() {
+        let chord = Hotkey::new(ModifierState::default(), 0x29); // HID Esc
+        let mut map = HotkeyMap::new();
+        map.bind(chord.clone(), HotkeyAction::Command("cancel".into()));
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.unbind(&chord),
+            Some(HotkeyAction::Command("cancel".into()))
+        );
+        assert!(map.is_empty());
+        assert!(map.unbind(&chord).is_none());
     }
 
     #[test]

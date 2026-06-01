@@ -24,6 +24,7 @@
 use std::collections::BTreeSet;
 
 use coklu_core::identity::DeviceId;
+use serde::{Deserialize, Serialize};
 
 use crate::InputEvent;
 use crate::profile::{DeviceProfileStore, KeyboardLayout};
@@ -69,7 +70,7 @@ impl Modifier {
 }
 
 /// Which logical modifiers are currently held, derived from the held keys.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModifierState {
     /// Control is held.
     pub ctrl: bool,
