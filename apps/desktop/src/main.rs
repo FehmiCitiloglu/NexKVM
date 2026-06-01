@@ -10,31 +10,50 @@ use coklu_core::platform::PlatformBackend;
 use coklu_core::{DeviceInfo, EventBus};
 use coklu_protocol::{PROTOCOL_VERSION, VersionRange};
 use coklu_storage::{Config, current_os};
+use coklu_telemetry::LogLevel;
 use tracing::info;
+
+mod cli;
+
+use cli::Command;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
-    match args.next().as_deref() {
-        Some("doctor") => return doctor(),
-        Some("protocol") => return protocol_info(),
-        Some("config-path") => {
+    let invocation = match cli::parse(std::env::args().skip(1)) {
+        Ok(invocation) => invocation,
+        Err(message) => anyhow::bail!(message),
+    };
+
+    match invocation.command {
+        Command::Run => return run_daemon(invocation.debug).await,
+        Command::Doctor => return doctor(),
+        Command::Protocol => return protocol_info(),
+        Command::ConfigPath => {
             println!("{}", config_path().display());
             return Ok(());
         }
-        Some("simulate") => return simulate(args.next()),
-        Some("help" | "--help" | "-h") => {
-            print_help();
+        Command::Devices => return list_devices(),
+        Command::Pair { uri } => return pair(&uri),
+        Command::Simulate { path } => return simulate(path),
+        Command::Help => {
+            print!("{}", cli::help_text());
             return Ok(());
         }
-        Some(other) => anyhow::bail!("unknown command `{other}`; run `coklu help`"),
-        None => {}
     }
+}
 
+/// Run the desktop daemon: foundation-phase wiring of telemetry, config, the
+/// event bus, the platform backend, and LAN discovery, until interrupted.
+async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     // 1. Config: load from the platform config dir (falls back to defaults).
     let config_path = config_path();
-    let config = Config::load(&config_path)
+    let mut config = Config::load(&config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
+
+    // `--debug` raises log verbosity for this run without editing config.
+    if debug {
+        config.telemetry.level = LogLevel::Debug;
+    }
 
     // 2. Telemetry: install the tracing subscriber before anything else logs.
     coklu_telemetry::init(&config.telemetry).context("initializing telemetry")?;
@@ -160,15 +179,27 @@ fn start_discovery(
     Ok(service)
 }
 
-fn print_help() {
-    println!("coklu developer CLI");
-    println!();
-    println!("USAGE:");
-    println!("  coklu                 Run the desktop daemon");
-    println!("  coklu doctor          Print local platform/config diagnostics");
-    println!("  coklu protocol        Print protocol compatibility info");
-    println!("  coklu config-path     Print the resolved config path");
-    println!("  coklu simulate [toml] Validate a local simulation config");
+/// List trusted (paired) devices from the persisted trust store.
+fn list_devices() -> anyhow::Result<()> {
+    use coklu_storage::FileTrustStore;
+
+    let path = trust_path();
+    let store = FileTrustStore::load(&path)
+        .with_context(|| format!("loading trust store from {}", path.display()))?;
+    println!("{}", cli::format_device_list(&store.entries()));
+    Ok(())
+}
+
+/// Decode a `coklu://` pairing bootstrap and print it for fingerprint
+/// confirmation. The network handshake itself is wired in a later phase; this
+/// surfaces the out-of-band authenticator the user must verify.
+fn pair(uri: &str) -> anyhow::Result<()> {
+    use coklu_crypto::PairingBootstrap;
+
+    let bootstrap = PairingBootstrap::from_uri(uri)
+        .context("decoding pairing uri (expected coklu://pair/v1/…)")?;
+    println!("{}", cli::format_pairing(&bootstrap));
+    Ok(())
 }
 
 fn doctor() -> anyhow::Result<()> {
@@ -237,6 +268,14 @@ fn config_path() -> std::path::PathBuf {
         std::path::PathBuf::from(".")
     };
     base.join("coklu").join("config.toml")
+}
+
+/// Resolve the trust-store path (sibling of the config file).
+fn trust_path() -> std::path::PathBuf {
+    config_path()
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("trust.json")
 }
 
 /// Construct the platform backend for the current OS, if one exists.
