@@ -52,10 +52,10 @@ pub use management::{
 };
 pub use platform::{PlatformBackend, PlatformCapabilities};
 pub use workspace::{
-    AppId, AppLaunchOutcome, AppLaunchRequest, ApplicationDescriptor, MemoryVisibility,
-    ScreenPoint, SearchKind, SearchQuery, SearchResult, SharedWorkspaceMemory, SnapDirection,
-    SpatialNavigationTarget, SpatialNavigator, SpatialViewport, UnifiedVirtualDesktop,
-    ViewportSize, WindowId, WindowSnapPlan, WindowSnapshot, WorkspaceBackend, WorkspaceDevice,
-    WorkspaceError, WorkspaceMemoryEntry, WorkspacePoint, WorkspaceRect, WorkspaceSearchProvider,
-    plan_window_snap,
+    AppId, AppLaunchOutcome, AppLaunchRequest, ApplicationDescriptor, FlickPlanner, FlickVector,
+    MemoryVisibility, ScreenPoint, SearchKind, SearchQuery, SearchResult, SharedWorkspaceMemory,
+    SnapDirection, SpatialNavigationTarget, SpatialNavigator, SpatialViewport, ThrowConfig,
+    ThrowOutcome, ThrowPayload, UnifiedVirtualDesktop, ViewportSize, WindowId, WindowSnapPlan,
+    WindowSnapshot, WorkspaceBackend, WorkspaceDevice, WorkspaceError, WorkspaceMemoryEntry,
+    WorkspacePoint, WorkspaceRect, WorkspaceSearchProvider, plan_window_snap,
 };

@@ -886,6 +886,229 @@ fn round_to_i32(value: f64) -> i32 {
     clamped as i32
 }
 
+/// 2D gesture release velocity in world pixels per second.
+///
+/// Produced by the UI/input layer when the user "flicks" the pointer (or a
+/// dragged file) toward another device. This is the raw momentum of the
+/// gesture; [`FlickPlanner`] turns it into a destination.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlickVector {
+    /// Horizontal velocity in world pixels per second.
+    pub vx: f64,
+    /// Vertical velocity in world pixels per second.
+    pub vy: f64,
+}
+
+impl FlickVector {
+    /// Construct a flick velocity.
+    #[must_use]
+    pub const fn new(vx: f64, vy: f64) -> Self {
+        Self { vx, vy }
+    }
+
+    /// Speed magnitude in world pixels per second.
+    #[must_use]
+    pub fn speed(self) -> f64 {
+        self.vx.hypot(self.vy)
+    }
+}
+
+/// What a throw gesture is carrying to the destination device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ThrowPayload {
+    /// Hand the pointer/control to the target device ("throw the mouse").
+    Cursor,
+    /// Deliver a pending file transfer to the target device.
+    File,
+    /// Push the current clipboard to the target device.
+    Clipboard,
+}
+
+/// Inertial tuning for throw/flick resolution.
+///
+/// `friction` models how quickly the projectile decelerates: a harder flick
+/// travels farther, so a weak flick may not reach any neighbor at all.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ThrowConfig {
+    /// Inertial deceleration in world pixels per second squared. Must be > 0.
+    pub friction: f64,
+    /// Minimum release speed (world px/s) for a gesture to count as a throw.
+    pub min_speed: f64,
+}
+
+impl Default for ThrowConfig {
+    fn default() -> Self {
+        Self {
+            friction: 1800.0,
+            min_speed: 600.0,
+        }
+    }
+}
+
+/// Resolved destination of a throw/flick gesture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThrowOutcome {
+    /// Device the gesture originated on.
+    pub source: DeviceId,
+    /// Device the projectile lands on.
+    pub target: DeviceId,
+    /// What is being delivered.
+    pub payload: ThrowPayload,
+    /// Landing point inside the target device's bounds.
+    pub landing: WorkspacePoint,
+    /// Total inertial travel distance in world pixels.
+    pub travel_distance: f64,
+}
+
+/// Physics-based "throw / flick" planner over the unified virtual desktop.
+///
+/// Given a release point and gesture velocity, it projects an inertial
+/// trajectory across the shared desktop and resolves which online device the
+/// projectile reaches (the "throw the mouse to another screen" / "throw a file
+/// like a physics object" interaction). It is pure and sans-IO: the input layer
+/// supplies the gesture velocity; the daemon performs the resulting handoff.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlickPlanner {
+    desktop: UnifiedVirtualDesktop,
+    config: ThrowConfig,
+}
+
+impl FlickPlanner {
+    /// Construct a planner with default inertial tuning.
+    #[must_use]
+    pub fn new(desktop: UnifiedVirtualDesktop) -> Self {
+        Self {
+            desktop,
+            config: ThrowConfig::default(),
+        }
+    }
+
+    /// Construct a planner with explicit inertial tuning.
+    #[must_use]
+    pub fn with_config(desktop: UnifiedVirtualDesktop, config: ThrowConfig) -> Self {
+        Self { desktop, config }
+    }
+
+    /// Resolve a flick/throw gesture to a destination device.
+    ///
+    /// Returns `None` when the gesture is too weak to count as a throw, the
+    /// configuration is degenerate, or no online device (other than `source`)
+    /// lies along the trajectory within inertial reach. The landing point is
+    /// always clamped inside the target device's bounds.
+    #[must_use]
+    pub fn throw(
+        &self,
+        source: DeviceId,
+        release: WorkspacePoint,
+        velocity: FlickVector,
+        payload: ThrowPayload,
+    ) -> Option<ThrowOutcome> {
+        let speed = velocity.speed();
+        if !speed.is_finite() || speed < self.config.min_speed {
+            return None;
+        }
+        let friction = self.config.friction;
+        if !(friction.is_finite() && friction > 0.0) {
+            return None;
+        }
+        // Inertial throw distance under constant deceleration: d = v² / (2a).
+        let max_distance = (speed * speed) / (2.0 * friction);
+        let dir = (velocity.vx / speed, velocity.vy / speed);
+        let origin = (f64::from(release.x), f64::from(release.y));
+
+        let mut best: Option<(f64, &WorkspaceDevice, f64)> = None;
+        for device in self.desktop.devices() {
+            if !device.online || device.device == source {
+                continue;
+            }
+            let Some((t_near, t_far)) = ray_rect_intersection(origin, dir, device.bounds) else {
+                continue;
+            };
+            // Device must be ahead of the release point and within reach.
+            if t_far < 0.0 || t_near > max_distance {
+                continue;
+            }
+            let entry = t_near.max(0.0);
+            if best.is_none_or(|(best_near, _, _)| entry < best_near) {
+                best = Some((entry, device, t_far));
+            }
+        }
+
+        let (_, device, t_far) = best?;
+        // Stop point along the trajectory, clamped to the device bounds so the
+        // payload always lands inside the destination.
+        let stop = max_distance.min(t_far);
+        let land_x = origin.0 + dir.0 * stop;
+        let land_y = origin.1 + dir.1 * stop;
+        Some(ThrowOutcome {
+            source,
+            target: device.device,
+            payload,
+            landing: clamp_point_to_rect(land_x, land_y, device.bounds),
+            travel_distance: max_distance,
+        })
+    }
+}
+
+/// Ray vs. axis-aligned rectangle intersection (slab method).
+///
+/// Returns the near/far distances along the unit-length `dir` at which the ray
+/// from `origin` enters and exits `rect`, or `None` if it never intersects.
+fn ray_rect_intersection(
+    origin: (f64, f64),
+    dir: (f64, f64),
+    rect: WorkspaceRect,
+) -> Option<(f64, f64)> {
+    let bounds = [
+        (
+            origin.0,
+            dir.0,
+            f64::from(rect.left()),
+            f64::from(rect.right()),
+        ),
+        (
+            origin.1,
+            dir.1,
+            f64::from(rect.top()),
+            f64::from(rect.bottom()),
+        ),
+    ];
+    let mut t_near = f64::NEG_INFINITY;
+    let mut t_far = f64::INFINITY;
+    for (o, d, lo, hi) in bounds {
+        if d.abs() < f64::EPSILON {
+            // Ray parallel to this slab: it must already lie within it.
+            if o < lo || o > hi {
+                return None;
+            }
+        } else {
+            let inv = 1.0 / d;
+            let mut t1 = (lo - o) * inv;
+            let mut t2 = (hi - o) * inv;
+            if t1 > t2 {
+                core::mem::swap(&mut t1, &mut t2);
+            }
+            t_near = t_near.max(t1);
+            t_far = t_far.min(t2);
+            if t_near > t_far {
+                return None;
+            }
+        }
+    }
+    Some((t_near, t_far))
+}
+
+fn clamp_point_to_rect(x: f64, y: f64, rect: WorkspaceRect) -> WorkspacePoint {
+    // `WorkspaceRect::contains` is right/bottom-exclusive, so clamp to the last
+    // interior pixel to guarantee the landing point is inside the device.
+    let max_x = f64::from(rect.right().saturating_sub(1)).max(f64::from(rect.left()));
+    let max_y = f64::from(rect.bottom().saturating_sub(1)).max(f64::from(rect.top()));
+    let cx = x.clamp(f64::from(rect.left()), max_x);
+    let cy = y.clamp(f64::from(rect.top()), max_y);
+    WorkspacePoint::new(round_to_i32(cx), round_to_i32(cy))
+}
+
 /// Platform app/window operations for shared workspace features.
 #[async_trait]
 pub trait WorkspaceBackend: Send + Sync {
@@ -1095,5 +1318,85 @@ mod tests {
             viewport.world_to_screen(WorkspacePoint::new(bounds.right(), bounds.bottom()));
         assert!(top_left.x >= 0.0 && top_left.y >= 0.0);
         assert!(bottom_right.x <= 800.0 && bottom_right.y <= 600.0);
+    }
+
+    #[test]
+    fn flick_throws_cursor_to_device_in_gesture_direction() {
+        let (desktop, left, right) = desktop_pair();
+        let planner = FlickPlanner::new(desktop);
+        // Hard flick to the right from inside the left device.
+        let outcome = planner
+            .throw(
+                left,
+                WorkspacePoint::new(500, 400),
+                FlickVector::new(3000.0, 0.0),
+                ThrowPayload::Cursor,
+            )
+            .expect("throw should reach the right device");
+        assert_eq!(outcome.source, left);
+        assert_eq!(outcome.target, right);
+        assert_eq!(outcome.payload, ThrowPayload::Cursor);
+        // Landing point must be inside the right device's bounds.
+        let target_bounds = WorkspaceRect::new(1000, 0, 1200, 900);
+        assert!(target_bounds.contains(outcome.landing));
+    }
+
+    #[test]
+    fn weak_flick_does_not_reach_any_device() {
+        let (desktop, left, _) = desktop_pair();
+        let planner = FlickPlanner::new(desktop);
+        // Below the min_speed threshold: not a throw at all.
+        assert!(
+            planner
+                .throw(
+                    left,
+                    WorkspacePoint::new(500, 400),
+                    FlickVector::new(100.0, 0.0),
+                    ThrowPayload::Cursor,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn flick_away_from_neighbors_finds_no_target() {
+        let (desktop, left, _) = desktop_pair();
+        let planner = FlickPlanner::new(desktop);
+        // Strong flick to the left, away from the only neighbor on the right.
+        assert!(
+            planner
+                .throw(
+                    left,
+                    WorkspacePoint::new(500, 400),
+                    FlickVector::new(-4000.0, 0.0),
+                    ThrowPayload::File,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn harder_flick_travels_farther() {
+        let (desktop, left, _) = desktop_pair();
+        let planner = FlickPlanner::new(desktop);
+        let soft = planner
+            .throw(
+                left,
+                WorkspacePoint::new(500, 400),
+                FlickVector::new(2000.0, 0.0),
+                ThrowPayload::File,
+            )
+            .map(|outcome| outcome.travel_distance);
+        let hard = planner
+            .throw(
+                left,
+                WorkspacePoint::new(500, 400),
+                FlickVector::new(4000.0, 0.0),
+                ThrowPayload::File,
+            )
+            .map(|outcome| outcome.travel_distance)
+            .expect("hard flick should reach the right device");
+        // A harder flick reaches farther; a soft flick may not reach at all.
+        assert!(soft.is_none_or(|soft_distance| hard > soft_distance));
     }
 }
