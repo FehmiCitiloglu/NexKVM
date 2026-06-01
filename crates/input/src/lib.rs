@@ -26,6 +26,7 @@ mod batching;
 mod boundary;
 mod coalesce;
 mod interpolation;
+mod keyboard;
 mod mode;
 mod monitor;
 mod navigation;
@@ -40,6 +41,7 @@ pub use batching::{InputBatchPolicy, InputBatcher};
 pub use boundary::{BoundaryDetector, Edge, EdgeLink, Transition};
 pub use coalesce::InputCoalescer;
 pub use interpolation::CursorInterpolator;
+pub use keyboard::{KeyForward, KeyboardShareController, Modifier, ModifierState};
 pub use mode::{InputProfile, PointerMode};
 pub use monitor::{DisplayRect, MonitorId, MonitorLayout};
 pub use navigation::{
