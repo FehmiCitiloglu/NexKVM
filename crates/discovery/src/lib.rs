@@ -20,6 +20,7 @@ mod internet;
 mod proximity;
 mod reconnect;
 mod registry;
+mod service;
 
 #[cfg(feature = "udp-broadcast")]
 mod udp;
@@ -41,6 +42,7 @@ pub use proximity::{
 };
 pub use reconnect::{ReconnectPlanner, ReconnectPolicy, ReconnectTarget};
 pub use registry::{DEFAULT_TTL, DiscoveryRegistry};
+pub use service::{DiscoveryService, FingerprintAllowlist, ServiceConfig, TrustOracle};
 
 #[cfg(feature = "udp-broadcast")]
 pub use udp::{UdpConfig, UdpDiscovery};

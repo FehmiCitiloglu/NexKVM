@@ -32,6 +32,7 @@ mod navigation;
 mod polling;
 mod prediction;
 mod profile;
+mod share;
 mod topology;
 
 pub use acceleration::{AccelerationCurve, SmartCursorAcceleration};
@@ -49,6 +50,7 @@ pub use navigation::{
 pub use polling::{AdaptivePoller, PollingPolicy};
 pub use prediction::{CursorSample, PredictiveCursor};
 pub use profile::{DeviceProfileStore, DeviceUxProfile, KeyboardLayout, QuickSwitch};
+pub use share::{CursorFocus, MouseShareController, PeerEntry, ShareOutput};
 pub use topology::{
     DesktopPoint, DevicePlacement, DeviceTopologyEditor, MonitorPreview, PreviewRect,
     SpatialDesktopMap,

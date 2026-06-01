@@ -20,6 +20,7 @@
 //! Pairing UX (QR scan or short numeric code) authenticates the *first* key
 //! exchange to defeat man-in-the-middle; subsequent reconnects are silent.
 
+mod coordinator;
 mod error;
 mod identity;
 mod pairing;
@@ -27,6 +28,7 @@ mod qr;
 mod session;
 mod trust;
 
+pub use coordinator::{ConfirmationCode, DEFAULT_PAIRING_TTL, PairingRole, PairingSession};
 pub use error::CryptoError;
 pub use identity::{DeviceIdentity, PublicKey};
 pub use pairing::{PairingMethod, PairingRequest, PairingResponse, PairingState};

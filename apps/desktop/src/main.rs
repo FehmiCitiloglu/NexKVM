@@ -69,7 +69,22 @@ async fn main() -> anyhow::Result<()> {
         "configuration loaded"
     );
 
-    // 6. Run until Ctrl-C, then signal a graceful shutdown on the bus.
+    // 6. LAN discovery: advertise this device and auto-reconnect trusted peers.
+    //    Kept alive for the daemon's lifetime; dropping it aborts its tasks.
+    let _discovery = if config.network.enable_discovery {
+        match start_discovery(&device, &config, &config_path) {
+            Ok(service) => Some(service),
+            Err(e) => {
+                tracing::warn!(error = %e, "LAN discovery disabled (startup failed)");
+                None
+            }
+        }
+    } else {
+        info!("LAN discovery disabled by config");
+        None
+    };
+
+    // 7. Run until Ctrl-C, then signal a graceful shutdown on the bus.
     tokio::signal::ctrl_c()
         .await
         .context("waiting for shutdown signal")?;
@@ -77,6 +92,72 @@ async fn main() -> anyhow::Result<()> {
     bus.publish(coklu_core::Event::Shutdown);
 
     Ok(())
+}
+
+/// Start LAN discovery: advertise over UDP broadcast and stream trusted-peer
+/// reconnect targets to a logging driver. Returns the live service so the caller
+/// keeps it alive; dropping it stops discovery.
+///
+/// Networking is wired in a later phase, so reconnect targets are logged rather
+/// than dialed; the discovery, trust-gating, and backoff machinery all run.
+fn start_discovery(
+    device: &DeviceInfo,
+    config: &Config,
+    config_path: &std::path::Path,
+) -> anyhow::Result<std::sync::Arc<coklu_discovery::DiscoveryService>> {
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
+
+    use coklu_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
+    use coklu_storage::FileTrustStore;
+
+    // Build the trust allowlist from persisted pairings (advisory matching).
+    let trust_path = config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("trust.json");
+    let allowlist = match FileTrustStore::load(&trust_path) {
+        Ok(store) => {
+            FingerprintAllowlist::new(store.entries().iter().map(|e| e.public_key.fingerprint()))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "trust store unavailable; reconnect disabled");
+            FingerprintAllowlist::default()
+        }
+    };
+
+    let backend = UdpDiscovery::bind(device.id, coklu_discovery::UdpConfig::default())
+        .context("binding UDP discovery socket")?;
+    let service = Arc::new(DiscoveryService::new(
+        Arc::new(backend),
+        Arc::new(allowlist),
+        ServiceConfig::default(),
+    ));
+
+    let listen_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.network.listen_port));
+    let driver = Arc::clone(&service);
+    let info = device.clone();
+    tokio::spawn(async move {
+        let mut targets = match driver.start(&info, listen_addr).await {
+            Ok(rx) => rx,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to start discovery advertising");
+                return;
+            }
+        };
+        info!(port = listen_addr.port(), "LAN discovery advertising");
+        while let Some(target) = targets.recv().await {
+            // Phase placeholder: network crate will dial and report back.
+            info!(
+                device = %target.device.info.name,
+                addr = %target.device.addr,
+                attempt = target.attempt,
+                "trusted peer rediscovered; reconnect pending network integration"
+            );
+        }
+    });
+
+    Ok(service)
 }
 
 fn print_help() {

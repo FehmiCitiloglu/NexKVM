@@ -59,6 +59,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Identity / misc
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# Hashing (SAS pairing confirmation; audited pure-Rust SHA-256)
+sha2 = "0.10"
+
 # Networking helpers
 socket2 = { version = "0.5", features = ["all"] }
 mdns-sd = "0.11"
