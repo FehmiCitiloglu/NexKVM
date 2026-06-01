@@ -354,6 +354,23 @@ impl ControlLease {
     }
 }
 
+/// A pending request from a participant to receive input control.
+///
+/// Created by [`CollaborationSession::request_control`] and resolved when the
+/// host grants ([`grant_control`](CollaborationSession::grant_control)) or denies
+/// ([`deny_control_request`](CollaborationSession::deny_control_request)) it.
+/// This is the explicit, auditable handoff path for pair-programming and
+/// collaborative-control sessions — control is never seized, only requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRequest {
+    /// Participant asking for control.
+    pub requester: ParticipantId,
+    /// Device the requester wants to control.
+    pub target_device: DeviceId,
+    /// Request timestamp supplied by caller.
+    pub requested_at_millis: u64,
+}
+
 /// A collaborative session snapshot and policy engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollaborationSession {
@@ -368,6 +385,7 @@ pub struct CollaborationSession {
     participants: Vec<CollaborationParticipant>,
     cursors: Vec<SharedCursorUpdate>,
     control: Option<ControlLease>,
+    pending_requests: Vec<ControlRequest>,
 }
 
 impl CollaborationSession {
@@ -382,6 +400,7 @@ impl CollaborationSession {
             participants: vec![host],
             cursors: Vec::new(),
             control: None,
+            pending_requests: Vec::new(),
         }
     }
 
@@ -401,6 +420,12 @@ impl CollaborationSession {
     #[must_use]
     pub const fn control(&self) -> Option<ControlLease> {
         self.control
+    }
+
+    /// Pending control requests in arrival order.
+    #[must_use]
+    pub fn pending_requests(&self) -> &[ControlRequest] {
+        &self.pending_requests
     }
 
     /// Find a participant.
@@ -447,6 +472,8 @@ impl CollaborationSession {
         self.participants.remove(index);
         self.cursors
             .retain(|cursor| cursor.participant != participant);
+        self.pending_requests
+            .retain(|request| request.requester != participant);
         if self
             .control
             .is_some_and(|lease| lease.holder == participant)
@@ -495,6 +522,73 @@ impl CollaborationSession {
         Ok(())
     }
 
+    /// Request input control of `target_device`.
+    ///
+    /// Queues an explicit, auditable request the host later grants or denies.
+    /// Re-requesting refreshes the existing pending request's target/timestamp
+    /// rather than enqueuing a duplicate.
+    ///
+    /// # Errors
+    /// Returns [`CollaborationError`] if the session disallows control requests,
+    /// the participant is unknown, or it lacks the `request_control` permission.
+    pub fn request_control(
+        &mut self,
+        requester: ParticipantId,
+        target_device: DeviceId,
+        now_millis: u64,
+    ) -> Result<ControlRequest, CollaborationError> {
+        if !self.policy.allow_control_requests {
+            return Err(CollaborationError::PermissionDenied(
+                "control requests disabled",
+            ));
+        }
+        if !self
+            .require_participant(requester)?
+            .permissions
+            .request_control
+        {
+            return Err(CollaborationError::PermissionDenied(
+                "participant cannot request control",
+            ));
+        }
+        let request = ControlRequest {
+            requester,
+            target_device,
+            requested_at_millis: now_millis,
+        };
+        if let Some(existing) = self
+            .pending_requests
+            .iter_mut()
+            .find(|pending| pending.requester == requester)
+        {
+            *existing = request;
+        } else {
+            self.pending_requests.push(request);
+        }
+        Ok(request)
+    }
+
+    /// Deny and drop a participant's pending control request.
+    ///
+    /// # Errors
+    /// Returns [`CollaborationError::PermissionDenied`] if the denier cannot
+    /// administer the session.
+    pub fn deny_control_request(
+        &mut self,
+        denier: ParticipantId,
+        requester: ParticipantId,
+    ) -> Result<bool, CollaborationError> {
+        if !self.require_participant(denier)?.permissions.administer {
+            return Err(CollaborationError::PermissionDenied(
+                "participant cannot deny control requests",
+            ));
+        }
+        let before = self.pending_requests.len();
+        self.pending_requests
+            .retain(|request| request.requester != requester);
+        Ok(self.pending_requests.len() != before)
+    }
+
     /// Grant input control to a participant.
     ///
     /// # Errors
@@ -540,6 +634,8 @@ impl CollaborationSession {
             granted_at_millis: now_millis,
             expires_at_millis: now_millis.saturating_add(duration),
         };
+        self.pending_requests
+            .retain(|request| request.requester != holder);
         self.control = Some(lease);
         Ok(lease)
     }
@@ -740,5 +836,76 @@ mod tests {
             .join(participant(ParticipantRole::Observer))
             .unwrap_err();
         assert!(matches!(err, CollaborationError::PermissionDenied(_)));
+    }
+
+    #[test]
+    fn shared_cursor_mode_rejects_control_requests() {
+        let host = participant(ParticipantRole::Host);
+        let navigator = participant(ParticipantRole::Navigator);
+        let navigator_id = navigator.id;
+        let target = navigator.device;
+        let mut session = CollaborationSession::new(host, CollaborationMode::SharedCursor);
+        session.join(navigator).unwrap();
+
+        let err = session
+            .request_control(navigator_id, target, 5)
+            .unwrap_err();
+        assert!(matches!(err, CollaborationError::PermissionDenied(_)));
+        assert!(session.pending_requests().is_empty());
+    }
+
+    #[test]
+    fn request_is_idempotent_per_participant() {
+        let host = participant(ParticipantRole::Host);
+        let navigator = participant(ParticipantRole::Navigator);
+        let navigator_id = navigator.id;
+        let target = host.device;
+        let mut session = CollaborationSession::new(host, CollaborationMode::PairProgramming);
+        session.join(navigator).unwrap();
+
+        session.request_control(navigator_id, target, 5).unwrap();
+        session.request_control(navigator_id, target, 9).unwrap();
+        assert_eq!(session.pending_requests().len(), 1);
+        assert_eq!(session.pending_requests()[0].requested_at_millis, 9);
+    }
+
+    #[test]
+    fn granting_control_clears_the_pending_request() {
+        let host = participant(ParticipantRole::Host);
+        let host_id = host.id;
+        let target = host.device;
+        let driver = participant(ParticipantRole::Driver);
+        let driver_id = driver.id;
+        let mut session = CollaborationSession::new(host, CollaborationMode::PairProgramming);
+        session.join(driver).unwrap();
+
+        session.request_control(driver_id, target, 5).unwrap();
+        assert_eq!(session.pending_requests().len(), 1);
+
+        session
+            .grant_control(host_id, driver_id, target, 10, Some(100))
+            .unwrap();
+        assert!(session.pending_requests().is_empty());
+        assert!(session.can_control(driver_id, target, 20));
+    }
+
+    #[test]
+    fn navigator_cannot_deny_requests() {
+        let host = participant(ParticipantRole::Host);
+        let host_id = host.id;
+        let target = host.device;
+        let navigator = participant(ParticipantRole::Navigator);
+        let navigator_id = navigator.id;
+        let mut session = CollaborationSession::new(host, CollaborationMode::CollaborativeControl);
+        session.join(navigator).unwrap();
+
+        session.request_control(navigator_id, target, 5).unwrap();
+        let err = session
+            .deny_control_request(navigator_id, navigator_id)
+            .unwrap_err();
+        assert!(matches!(err, CollaborationError::PermissionDenied(_)));
+
+        assert!(session.deny_control_request(host_id, navigator_id).unwrap());
+        assert!(session.pending_requests().is_empty());
     }
 }

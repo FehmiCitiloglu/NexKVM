@@ -716,6 +716,176 @@ impl SpatialNavigator {
     }
 }
 
+/// A point in viewport/screen space (logical UI pixels).
+///
+/// Distinct from [`WorkspacePoint`] (integer *world* coordinates): screen points
+/// are floating point so pan/zoom stay smooth and reversible.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ScreenPoint {
+    /// Horizontal screen coordinate.
+    pub x: f64,
+    /// Vertical screen coordinate.
+    pub y: f64,
+}
+
+impl ScreenPoint {
+    /// Construct a screen point.
+    #[must_use]
+    pub const fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+}
+
+/// Size of the viewport the spatial map is rendered into, in screen pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ViewportSize {
+    /// Viewport width in screen pixels.
+    pub width: f64,
+    /// Viewport height in screen pixels.
+    pub height: f64,
+}
+
+impl ViewportSize {
+    /// Construct a viewport size.
+    #[must_use]
+    pub const fn new(width: f64, height: f64) -> Self {
+        Self { width, height }
+    }
+}
+
+/// A pannable, zoomable camera over the (effectively infinite) virtual desktop.
+///
+/// The camera maps the unbounded world coordinate space onto a finite viewport
+/// so a spatial-desktop UI can render a zoomable device topology. It is pure and
+/// sans-IO: the UI layer owns rendering and input; this only computes the
+/// world↔screen transform, panning, anchored zoom, and zoom-to-fit. `zoom` is
+/// screen pixels per world pixel and is clamped to [`MIN_ZOOM`, `MAX_ZOOM`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SpatialViewport {
+    /// World point currently centered in the viewport.
+    center_x: f64,
+    center_y: f64,
+    /// Screen pixels per world pixel.
+    zoom: f64,
+    /// Viewport size in screen pixels.
+    size: ViewportSize,
+}
+
+impl SpatialViewport {
+    /// Smallest allowed zoom (most zoomed-out).
+    pub const MIN_ZOOM: f64 = 0.02;
+    /// Largest allowed zoom (most zoomed-in).
+    pub const MAX_ZOOM: f64 = 8.0;
+
+    /// Create a viewport centered on the world origin at unit zoom.
+    #[must_use]
+    pub fn new(size: ViewportSize) -> Self {
+        Self {
+            center_x: 0.0,
+            center_y: 0.0,
+            zoom: 1.0,
+            size,
+        }
+    }
+
+    /// Current zoom (screen pixels per world pixel).
+    #[must_use]
+    pub const fn zoom(self) -> f64 {
+        self.zoom
+    }
+
+    /// World point at the center of the viewport.
+    #[must_use]
+    pub fn center(self) -> WorkspacePoint {
+        WorkspacePoint::new(round_to_i32(self.center_x), round_to_i32(self.center_y))
+    }
+
+    /// Viewport size in screen pixels.
+    #[must_use]
+    pub const fn size(self) -> ViewportSize {
+        self.size
+    }
+
+    /// Update the viewport size (e.g. on window resize), keeping center/zoom.
+    pub fn set_size(&mut self, size: ViewportSize) {
+        self.size = size;
+    }
+
+    /// Project a world point to screen space.
+    #[must_use]
+    pub fn world_to_screen(self, world: WorkspacePoint) -> ScreenPoint {
+        ScreenPoint::new(
+            (f64::from(world.x) - self.center_x) * self.zoom + self.size.width / 2.0,
+            (f64::from(world.y) - self.center_y) * self.zoom + self.size.height / 2.0,
+        )
+    }
+
+    /// Unproject a screen point back to world space.
+    #[must_use]
+    pub fn screen_to_world(self, screen: ScreenPoint) -> WorkspacePoint {
+        let wx = (screen.x - self.size.width / 2.0) / self.zoom + self.center_x;
+        let wy = (screen.y - self.size.height / 2.0) / self.zoom + self.center_y;
+        WorkspacePoint::new(round_to_i32(wx), round_to_i32(wy))
+    }
+
+    /// Pan the camera by a screen-space delta (e.g. a drag gesture).
+    pub fn pan_by_screen(&mut self, dx: f64, dy: f64) {
+        self.center_x -= dx / self.zoom;
+        self.center_y -= dy / self.zoom;
+    }
+
+    /// Zoom by `factor` while keeping the world point under `anchor` fixed on
+    /// screen — the standard "scroll-to-zoom toward the cursor" behavior.
+    ///
+    /// `factor > 1.0` zooms in, `< 1.0` zooms out. The resulting zoom is clamped
+    /// to [`MIN_ZOOM`, `MAX_ZOOM`].
+    pub fn zoom_by(&mut self, factor: f64, anchor: ScreenPoint) {
+        if !(factor.is_finite() && factor > 0.0) {
+            return;
+        }
+        let before = self.screen_to_world_f64(anchor);
+        self.zoom = (self.zoom * factor).clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
+        let after = self.screen_to_world_f64(anchor);
+        // Shift center so the anchor's world point stays put.
+        self.center_x += before.0 - after.0;
+        self.center_y += before.1 - after.1;
+    }
+
+    /// Recenter (and rezoom) so `rect` fits in the viewport with `padding`
+    /// fraction of margin on each side. Used for "zoom to fit all devices".
+    ///
+    /// A zero-area rect or non-positive viewport leaves the camera unchanged.
+    pub fn fit_rect(&mut self, rect: WorkspaceRect, padding: f64) {
+        if self.size.width <= 0.0 || self.size.height <= 0.0 {
+            return;
+        }
+        let pad = padding.clamp(0.0, 0.9);
+        let usable_w = self.size.width * (1.0 - pad);
+        let usable_h = self.size.height * (1.0 - pad);
+        let world_w = f64::from(rect.width).max(1.0);
+        let world_h = f64::from(rect.height).max(1.0);
+        let zoom = (usable_w / world_w).min(usable_h / world_h);
+        self.zoom = zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
+        let center = rect.center();
+        self.center_x = f64::from(center.x);
+        self.center_y = f64::from(center.y);
+    }
+
+    fn screen_to_world_f64(self, screen: ScreenPoint) -> (f64, f64) {
+        (
+            (screen.x - self.size.width / 2.0) / self.zoom + self.center_x,
+            (screen.y - self.size.height / 2.0) / self.zoom + self.center_y,
+        )
+    }
+}
+
+fn round_to_i32(value: f64) -> i32 {
+    let clamped = value
+        .round()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX));
+    clamped as i32
+}
+
 /// Platform app/window operations for shared workspace features.
 #[async_trait]
 pub trait WorkspaceBackend: Send + Sync {
@@ -868,5 +1038,62 @@ mod tests {
             .unwrap();
         assert_eq!(target.device, right);
         assert_eq!(target.point, WorkspacePoint::new(1600, 450));
+    }
+
+    #[test]
+    fn viewport_world_screen_roundtrip_is_stable() {
+        let mut viewport = SpatialViewport::new(ViewportSize::new(800.0, 600.0));
+        viewport.zoom_by(2.0, ScreenPoint::new(400.0, 300.0));
+        let world = WorkspacePoint::new(1234, -567);
+        let screen = viewport.world_to_screen(world);
+        assert_eq!(viewport.screen_to_world(screen), world);
+    }
+
+    #[test]
+    fn anchored_zoom_keeps_point_under_cursor_fixed() {
+        let mut viewport = SpatialViewport::new(ViewportSize::new(1000.0, 800.0));
+        let cursor = ScreenPoint::new(720.0, 240.0);
+        let world_under_cursor = viewport.screen_to_world(cursor);
+        viewport.zoom_by(3.0, cursor);
+        // The world point under the cursor must stay under the cursor.
+        assert_eq!(viewport.screen_to_world(cursor), world_under_cursor);
+        assert!((viewport.zoom() - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn zoom_is_clamped_to_limits() {
+        let mut viewport = SpatialViewport::new(ViewportSize::new(800.0, 600.0));
+        let anchor = ScreenPoint::new(400.0, 300.0);
+        viewport.zoom_by(1_000.0, anchor);
+        assert!((viewport.zoom() - SpatialViewport::MAX_ZOOM).abs() < f64::EPSILON);
+        viewport.zoom_by(0.000_001, anchor);
+        assert!((viewport.zoom() - SpatialViewport::MIN_ZOOM).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn pan_shifts_center_in_world_units() {
+        let mut viewport = SpatialViewport::new(ViewportSize::new(800.0, 600.0));
+        viewport.zoom_by(2.0, ScreenPoint::new(400.0, 300.0));
+        let before = viewport.center();
+        // Dragging content right by 200 screen px moves the camera left 100 world px.
+        viewport.pan_by_screen(200.0, 0.0);
+        assert_eq!(viewport.center().x, before.x - 100);
+    }
+
+    #[test]
+    fn fit_rect_centers_and_frames_all_devices() {
+        let (desktop, _, _) = desktop_pair();
+        let bounds = desktop.bounds().unwrap();
+        let mut viewport = SpatialViewport::new(ViewportSize::new(800.0, 600.0));
+        viewport.fit_rect(bounds, 0.1);
+
+        // Camera centers on the combined device bounds.
+        assert_eq!(viewport.center(), bounds.center());
+        // The whole topology lands within the viewport.
+        let top_left = viewport.world_to_screen(WorkspacePoint::new(bounds.left(), bounds.top()));
+        let bottom_right =
+            viewport.world_to_screen(WorkspacePoint::new(bounds.right(), bounds.bottom()));
+        assert!(top_left.x >= 0.0 && top_left.y >= 0.0);
+        assert!(bottom_right.x <= 800.0 && bottom_right.y <= 600.0);
     }
 }

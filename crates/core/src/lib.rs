@@ -40,7 +40,8 @@ pub use automation::{
 pub use collaboration::{
     CollaborationBackend, CollaborationError, CollaborationMode, CollaborationParticipant,
     CollaborationPermissions, CollaborationPolicy, CollaborationSession, CollaborationSessionId,
-    ControlLease, ParticipantId, ParticipantRole, SharedCursorUpdate, SharedCursorVisibility,
+    ControlLease, ControlRequest, ParticipantId, ParticipantRole, SharedCursorUpdate,
+    SharedCursorVisibility,
 };
 pub use error::CoreError;
 pub use event::{Event, EventBus, EventEnvelope};
@@ -51,9 +52,10 @@ pub use management::{
 };
 pub use platform::{PlatformBackend, PlatformCapabilities};
 pub use workspace::{
-    AppId, AppLaunchOutcome, AppLaunchRequest, ApplicationDescriptor, MemoryVisibility, SearchKind,
-    SearchQuery, SearchResult, SharedWorkspaceMemory, SnapDirection, SpatialNavigationTarget,
-    SpatialNavigator, UnifiedVirtualDesktop, WindowId, WindowSnapPlan, WindowSnapshot,
-    WorkspaceBackend, WorkspaceDevice, WorkspaceError, WorkspaceMemoryEntry, WorkspacePoint,
-    WorkspaceRect, WorkspaceSearchProvider, plan_window_snap,
+    AppId, AppLaunchOutcome, AppLaunchRequest, ApplicationDescriptor, MemoryVisibility,
+    ScreenPoint, SearchKind, SearchQuery, SearchResult, SharedWorkspaceMemory, SnapDirection,
+    SpatialNavigationTarget, SpatialNavigator, SpatialViewport, UnifiedVirtualDesktop,
+    ViewportSize, WindowId, WindowSnapPlan, WindowSnapshot, WorkspaceBackend, WorkspaceDevice,
+    WorkspaceError, WorkspaceMemoryEntry, WorkspacePoint, WorkspaceRect, WorkspaceSearchProvider,
+    plan_window_snap,
 };
