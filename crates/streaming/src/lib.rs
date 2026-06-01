@@ -34,6 +34,7 @@ mod file_transfer_queue;
 mod file_transfer_reassembly;
 mod file_transfer_session;
 mod file_transfer_types;
+mod preview;
 mod screen;
 
 pub use audio::{
@@ -56,6 +57,7 @@ pub use file_transfer_session::{
 pub use file_transfer_types::{
     TransferEntry, TransferFileData, TransferId, TransferManifest, TransferSource,
 };
+pub use preview::{HoverPreviewController, PreviewDecision, PreviewPolicy};
 pub use screen::{
     CaptureSource, CaptureSourceId, EncodedScreenFrame, FrameDependency, GpuMemoryKind,
     HardwareEncoder, PixelFormat, ScreenCaptureBackend, ScreenCodec, ScreenEncoderBackend,
