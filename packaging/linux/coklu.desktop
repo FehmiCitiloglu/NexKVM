@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=coklu
+Comment=Cross-platform device continuity daemon
+Exec=coklu
+Icon=coklu
+Terminal=true
+Categories=Utility;Network;

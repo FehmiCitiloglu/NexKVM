@@ -39,3 +39,22 @@ coklu-platform-linux.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 coklu-platform-windows.workspace = true
+
+[package.metadata.deb]
+maintainer = "coklu contributors"
+copyright = "2026, coklu contributors"
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+	["../../target/release/coklu", "usr/bin/coklu", "755"],
+	["../../README.md", "usr/share/doc/coklu/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Cross-platform device continuity daemon"
+release = "1"
+assets = [
+	{ source = "../../target/release/coklu", dest = "/usr/bin/coklu", mode = "755" },
+	{ source = "../../README.md", dest = "/usr/share/doc/coklu/README.md", mode = "644", doc = true },
+]
