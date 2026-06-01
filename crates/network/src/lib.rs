@@ -51,6 +51,7 @@ pub mod mesh;
 pub mod packet;
 pub mod quality;
 pub mod relay;
+pub mod remote_session;
 pub mod retry;
 pub mod session;
 pub mod wire;
@@ -84,6 +85,11 @@ pub use quality::{
     NetworkQualitySample,
 };
 pub use relay::{RelayAdmission, RelayPolicy, RelayRegistration, RelayRoutePlan, RelayServerKind};
+pub use remote_session::{
+    RejectReason, RemoteSessionAnswer, RemoteSessionError, RemoteSessionEstablisher,
+    RemoteSessionId, RemoteSessionOffer, RemoteSessionState, SessionSecurityRequirements,
+    answer_offer,
+};
 pub use retry::Backoff;
 pub use selector::TransportSelector;
 pub use session::{Session, SessionToken};

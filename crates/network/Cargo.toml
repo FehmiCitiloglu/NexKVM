@@ -39,6 +39,7 @@ rcgen = { version = "0.13", optional = true }
 [dev-dependencies]
 coklu-input.workspace = true
 coklu-streaming.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
 
 [[bench]]

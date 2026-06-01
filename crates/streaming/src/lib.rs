@@ -27,6 +27,7 @@ use bytes::Bytes;
 use thiserror::Error;
 
 mod audio;
+mod audio_sync;
 mod file_transfer_cipher;
 mod file_transfer_compression;
 mod file_transfer_queue;
@@ -39,6 +40,7 @@ pub use audio::{
     AudioBackend, AudioCodec, AudioDevice, AudioDeviceId, AudioDeviceProfile, AudioDeviceRole,
     AudioFormat, AudioFrame, AudioRoute, AudioRouteMode, AudioRouter, SampleFormat,
 };
+pub use audio_sync::{AudioJitterBuffer, JitterConfig, JitterOutput, JitterStats, PushOutcome};
 pub use file_transfer_cipher::{PlaintextTransferCipher, SessionTransferCipher, TransferCipher};
 pub use file_transfer_compression::{
     CompressionStrategy, TransferCompression, TransferCompressionPolicy,

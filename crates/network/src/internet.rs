@@ -11,6 +11,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use coklu_core::identity::DeviceId;
+use serde::{Deserialize, Serialize};
 
 /// ICE/STUN/TURN server used by the WebRTC backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +57,7 @@ impl IceServer {
 }
 
 /// NAT behavior estimate from connectivity checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NatType {
     /// No NAT, public endpoint is directly reachable.
     OpenInternet,
@@ -73,7 +74,7 @@ pub enum NatType {
 }
 
 /// Type of remote candidate advertised/discovered for a device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CandidateKind {
     /// Direct host candidate.
     Host,
@@ -84,7 +85,7 @@ pub enum CandidateKind {
 }
 
 /// One remote address candidate for internet-mode connectivity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InternetCandidate {
     /// Candidate type.
     pub kind: CandidateKind,
@@ -107,7 +108,7 @@ impl InternetCandidate {
 }
 
 /// Relay server fallback configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayConfig {
     /// Relay control/data endpoint.
     pub endpoint: SocketAddr,
