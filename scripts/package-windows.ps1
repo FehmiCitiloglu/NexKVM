@@ -16,7 +16,9 @@ if (-not (Test-Path $logoPng)) {
 }
 
 if (-not (Get-Command magick -ErrorAction SilentlyContinue)) {
-  throw "ImageMagick 'magick' not found. Install it (e.g. choco install imagemagick -y)."
+ echo "magicki not found nstalling imagemagick"
+  winget install ImageMagick.ImageMagick
+ # throw "ImageMagick 'magick' not found. Install it (e.g. choco install imagemagick -y or winget install ImageMagick.ImageMagick)."
 }
 
 Write-Host "Generating installer icon from logo..."
@@ -26,7 +28,9 @@ Write-Host "Building release binary..."
 cargo build -p coklu --release
 
 if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-  throw "makensis not found. Install NSIS (e.g. choco install nsis -y)."
+ echo "makensis not found. Installing NSIS"
+  winget install NSIS.NSIS
+  #throw "makensis not found. Install NSIS (e.g. choco install nsis -y or winget install NSIS.NSIS)."
 }
 
 Write-Host "Building NSIS installer..."
