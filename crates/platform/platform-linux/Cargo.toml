@@ -13,4 +13,5 @@ workspace = true
 
 [dependencies]
 coklu-core.workspace = true
+coklu-input.workspace = true
 async-trait.workspace = true

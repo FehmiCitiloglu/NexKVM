@@ -16,6 +16,8 @@ use async_trait::async_trait;
 use coklu_core::platform::{PlatformBackend, PlatformCapabilities};
 use coklu_core::{CoreError, OsKind};
 
+pub mod inject;
+
 /// macOS implementation of [`PlatformBackend`].
 #[derive(Debug, Default)]
 pub struct MacosBackend;

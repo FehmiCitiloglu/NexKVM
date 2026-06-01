@@ -17,6 +17,8 @@ use async_trait::async_trait;
 use coklu_core::platform::{PlatformBackend, PlatformCapabilities};
 use coklu_core::{CoreError, OsKind};
 
+pub mod inject;
+
 /// Display/session family detected for Linux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxSessionKind {
