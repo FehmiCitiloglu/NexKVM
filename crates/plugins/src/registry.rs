@@ -7,6 +7,7 @@ use coklu_core::Event;
 
 use crate::capability::PluginCapabilities;
 use crate::error::PluginError;
+use crate::host::EventHook;
 use crate::plugin::{Plugin, PluginContext};
 
 struct Loaded {
@@ -134,7 +135,9 @@ impl PluginRegistry {
 
 fn can_receive_event(granted: &PluginCapabilities, event: &Event) -> bool {
     match event {
-        Event::Inbound { .. } | Event::Outbound { .. } => granted.network_send,
+        Event::Inbound { kind, .. } | Event::Outbound { kind, .. } => {
+            EventHook::for_message(*kind).is_some_and(|hook| hook.is_permitted(granted))
+        }
         Event::DeviceDiscovered(_) | Event::DeviceConnected(_) | Event::DeviceDisconnected(_) => {
             granted.device_metadata
         }

@@ -22,6 +22,7 @@
 
 mod capability;
 mod error;
+mod host;
 mod hot_reload;
 mod manifest;
 mod marketplace;
@@ -31,6 +32,7 @@ mod runtime;
 
 pub use capability::PluginCapabilities;
 pub use error::PluginError;
+pub use host::{EventHook, HostBroker, HostCall};
 pub use hot_reload::{HotReloadTracker, PluginArtifactState, ReloadDecision};
 pub use manifest::PluginManifest;
 pub use marketplace::{MarketplaceCatalog, MarketplaceListing, MarketplaceTrust, PluginArtifact};
