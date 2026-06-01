@@ -35,6 +35,7 @@ pub use automation::{
     AutomationAction, AutomationEngine, AutomationPlan, AutomationRule, AutomationTrigger,
     CommandError, CommandId, CommandPaletteIndex, CommandScope, CrossDeviceNotification,
     NotificationAction, NotificationId, NotificationUrgency, QuickCommand, QuickCommandExecutor,
+    ScriptContext, ScriptEngine, ScriptError, ScriptLanguage, ScriptRef, ShortcutId,
 };
 pub use collaboration::{
     CollaborationBackend, CollaborationError, CollaborationMode, CollaborationParticipant,

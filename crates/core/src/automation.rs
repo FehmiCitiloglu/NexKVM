@@ -233,6 +233,23 @@ pub trait QuickCommandExecutor: Send + Sync {
     async fn execute(&self, command: CommandId) -> Result<(), CommandError>;
 }
 
+/// Stable identifier for a device-aware keyboard shortcut.
+///
+/// `core` stays free of physical key/chord representation (that lives in the
+/// `input`/`platform-*` crates). A backend resolves a captured chord to this
+/// stable id and emits an [`AutomationTrigger::ShortcutPressed`], so the same
+/// logical shortcut can map to different physical chords per device/OS.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ShortcutId(pub String);
+
+impl ShortcutId {
+    /// Construct a shortcut id.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
 /// Trigger that can activate an automation rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutomationTrigger {
@@ -242,6 +259,47 @@ pub enum AutomationTrigger {
     CommandInvoked(CommandId),
     /// A specific app became foreground on a device.
     AppFocused { device: DeviceId, app: AppId },
+    /// A device-aware shortcut was pressed on a specific device.
+    ShortcutPressed {
+        /// Device the shortcut fired on.
+        device: DeviceId,
+        /// Logical shortcut id resolved by the input/platform backend.
+        shortcut: ShortcutId,
+    },
+}
+
+/// Scripting language a user-authored automation script targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScriptLanguage {
+    /// Lua script (sandboxed via the plugin runtime).
+    Lua,
+    /// JavaScript script (sandboxed via the plugin runtime).
+    JavaScript,
+}
+
+/// Reference to a user-authored automation script.
+///
+/// `core` stores only the language and a stable id; the script *source* and the
+/// interpreter live behind the scripting backend so this control plane stays
+/// sans-engine and portable. The actual Lua/JS engines land behind the plugin
+/// runtime feature flags during integration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptRef {
+    /// Stable script id, resolved to source by the scripting backend.
+    pub id: String,
+    /// Language the script is written in.
+    pub language: ScriptLanguage,
+}
+
+impl ScriptRef {
+    /// Construct a script reference.
+    #[must_use]
+    pub fn new(id: impl Into<String>, language: ScriptLanguage) -> Self {
+        Self {
+            id: id.into(),
+            language,
+        }
+    }
 }
 
 /// Action emitted by a smart workspace automation rule.
@@ -255,6 +313,8 @@ pub enum AutomationAction {
     SendNotification(CrossDeviceNotification),
     /// Invoke another quick command.
     InvokeCommand(CommandId),
+    /// Run a user-authored script through the scripting backend.
+    RunScript(ScriptRef),
 }
 
 /// One policy-controlled automation rule.
@@ -325,6 +385,55 @@ impl AutomationEngine {
             })
             .collect()
     }
+}
+
+/// Context handed to a scripting backend when a script action fires.
+///
+/// Carries the trigger that caused the script to run so device-aware scripts can
+/// branch on which device/shortcut activated them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptContext {
+    /// Rule that fired the script.
+    pub rule_id: String,
+    /// Trigger that activated the rule.
+    pub trigger: AutomationTrigger,
+}
+
+/// Errors from running an automation script.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ScriptError {
+    /// No script with the given id is registered.
+    #[error("script not found: {0}")]
+    NotFound(String),
+    /// The backend does not support the script's language in this build.
+    #[error("unsupported script language")]
+    UnsupportedLanguage,
+    /// Policy denied the script (e.g. it requested an ungranted capability).
+    #[error("script permission denied: {0}")]
+    PermissionDenied(&'static str),
+    /// The script raised an error at runtime.
+    #[error("script runtime error: {0}")]
+    Runtime(String),
+}
+
+/// Executes user-authored automation scripts after policy validation.
+///
+/// This is the sans-engine boundary: implementations wrap a sandboxed Lua/JS
+/// interpreter (behind the plugin runtime feature flags) and enforce the same
+/// capability checks as plugins. The pure [`AutomationEngine`] only *plans* a
+/// [`AutomationAction::RunScript`]; the daemon hands the plan here to execute.
+#[async_trait]
+pub trait ScriptEngine: Send + Sync {
+    /// Whether this backend can execute `language` in the current build.
+    fn supports(&self, language: ScriptLanguage) -> bool;
+
+    /// Run a referenced script.
+    ///
+    /// # Errors
+    /// Returns [`ScriptError`] when the script is unknown, its language is
+    /// unsupported, policy denies it, or it fails at runtime.
+    async fn run(&self, script: &ScriptRef, ctx: ScriptContext) -> Result<(), ScriptError>;
 }
 
 fn command_score(command: &QuickCommand, needle: &str) -> Option<u16> {
@@ -408,5 +517,44 @@ mod tests {
         };
         assert!(notification.is_fresh(20));
         assert!(!notification.is_fresh(21));
+    }
+
+    #[test]
+    fn device_aware_shortcut_triggers_only_its_rule() {
+        let laptop = DeviceId::generate();
+        let desktop = DeviceId::generate();
+        let mut engine = AutomationEngine::new();
+        engine
+            .upsert(AutomationRule {
+                id: "screenshot".into(),
+                name: "Capture on laptop".into(),
+                trigger: AutomationTrigger::ShortcutPressed {
+                    device: laptop,
+                    shortcut: ShortcutId::new("capture"),
+                },
+                action: AutomationAction::RunScript(ScriptRef::new(
+                    "screenshot.lua",
+                    ScriptLanguage::Lua,
+                )),
+                enabled: true,
+            })
+            .unwrap();
+
+        // Same shortcut, different device — must not fire.
+        let other_device = engine.plan(&AutomationTrigger::ShortcutPressed {
+            device: desktop,
+            shortcut: ShortcutId::new("capture"),
+        });
+        assert!(other_device.is_empty());
+
+        let plans = engine.plan(&AutomationTrigger::ShortcutPressed {
+            device: laptop,
+            shortcut: ShortcutId::new("capture"),
+        });
+        assert_eq!(plans.len(), 1);
+        assert_eq!(
+            plans[0].action,
+            AutomationAction::RunScript(ScriptRef::new("screenshot.lua", ScriptLanguage::Lua))
+        );
     }
 }
