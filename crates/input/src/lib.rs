@@ -30,12 +30,14 @@ mod interpolation;
 mod keyboard;
 mod mode;
 mod monitor;
+mod monitor_scale;
 mod navigation;
 mod polling;
 mod prediction;
 mod profile;
 mod share;
 mod topology;
+mod transition;
 
 pub use acceleration::{AccelerationCurve, SmartCursorAcceleration};
 pub use batching::{InputBatchPolicy, InputBatcher};
@@ -46,6 +48,7 @@ pub use interpolation::CursorInterpolator;
 pub use keyboard::{KeyForward, KeyboardShareController, Modifier, ModifierState};
 pub use mode::{InputProfile, PointerMode};
 pub use monitor::{DisplayRect, MonitorId, MonitorLayout};
+pub use monitor_scale::{LocalPoint, LogicalSize, MonitorScale, ScaledLayout};
 pub use navigation::{
     CursorMotionSample, CursorThrow, CursorThrowPlanner, CursorThrowPolicy, GestureDirection,
     GestureFrame, GestureSwitchDecision, GestureSwitchPolicy, GestureSwitchRecognizer,
@@ -58,6 +61,9 @@ pub use share::{CursorFocus, MouseShareController, PeerEntry, ShareOutput};
 pub use topology::{
     DesktopPoint, DevicePlacement, DeviceTopologyEditor, MonitorPreview, PreviewRect,
     SpatialDesktopMap,
+};
+pub use transition::{
+    CursorTransition, CursorTransitionEngine, CursorTransitionPolicy, JitterFilter,
 };
 
 /// Errors from input capture/injection.
