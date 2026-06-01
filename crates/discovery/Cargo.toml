@@ -1,0 +1,34 @@
+[package]
+name = "coklu-discovery"
+description = "LAN device discovery (mDNS) abstraction for coklu."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["udp-broadcast"]
+# UDP broadcast backend (tokio + socket2, no external service deps).
+udp-broadcast = []
+# mDNS/DNS-SD backend via `mdns-sd`.
+mdns = ["dep:mdns-sd"]
+
+[dependencies]
+coklu-core.workspace = true
+coklu-crypto.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+socket2.workspace = true
+tokio = { workspace = true, features = ["net", "rt", "time", "sync", "macros"] }
+mdns-sd = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }

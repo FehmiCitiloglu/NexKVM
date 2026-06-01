@@ -1,0 +1,24 @@
+[package]
+name = "coklu-telemetry"
+description = "Structured logging, tracing, and diagnostics initialization for coklu."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `json` swaps the human log format for machine-readable structured output,
+# suitable for shipping to a log aggregator in headless/server deployments.
+default = []
+json = ["tracing-subscriber/json"]
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

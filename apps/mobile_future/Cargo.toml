@@ -1,0 +1,16 @@
+[package]
+name = "coklu-mobile-future"
+description = "Placeholder for the future coklu mobile companion (Android/iOS)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+coklu-core.workspace = true

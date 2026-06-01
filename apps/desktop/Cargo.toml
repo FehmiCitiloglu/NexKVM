@@ -1,0 +1,41 @@
+[package]
+name = "coklu"
+description = "coklu desktop daemon — cross-platform device continuity."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "coklu"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+coklu-core.workspace = true
+coklu-protocol.workspace = true
+coklu-crypto.workspace = true
+coklu-network.workspace = true
+coklu-discovery.workspace = true
+coklu-input.workspace = true
+coklu-clipboard.workspace = true
+coklu-streaming.workspace = true
+coklu-plugins.workspace = true
+coklu-storage.workspace = true
+coklu-telemetry.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coklu-platform-macos.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+coklu-platform-linux.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+coklu-platform-windows.workspace = true

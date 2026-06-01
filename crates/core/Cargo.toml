@@ -1,0 +1,25 @@
+[package]
+name = "coklu-core"
+description = "Core domain: device identity, the event bus, and cross-platform backend traits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coklu-protocol.workspace = true
+coklu-crypto.workspace = true
+serde.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

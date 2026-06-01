@@ -1,0 +1,35 @@
+//! Pairing & security model for coklu.
+//!
+//! This crate defines the *model* — the types and trait boundaries — for how
+//! devices establish trust and secure a session. Concrete cryptographic
+//! backends (X25519 key agreement, Ed25519 signatures, ChaCha20-Poly1305 AEAD)
+//! are introduced behind feature flags in a later phase; the foundation fixes
+//! the interfaces so the rest of the platform can be built against them.
+//!
+//! # Threat model & guarantees (target)
+//! - **Confidentiality + integrity** of all traffic via an AEAD session cipher
+//!   keyed by an authenticated key exchange. The transport (QUIC/TLS) provides
+//!   the outer channel; this layer binds it to *device identity*.
+//! - **Mutual device authentication**: each device owns a long-lived identity
+//!   keypair. Pairing exchanges and pins the peer's public key.
+//! - **Replay protection**: monotonic protocol message ids plus a per-session
+//!   nonce window.
+//! - **Trust on first use, then pinned**: after pairing, a device only accepts
+//!   sessions from keys present in its [`TrustStore`].
+//!
+//! Pairing UX (QR scan or short numeric code) authenticates the *first* key
+//! exchange to defeat man-in-the-middle; subsequent reconnects are silent.
+
+mod error;
+mod identity;
+mod pairing;
+mod qr;
+mod session;
+mod trust;
+
+pub use error::CryptoError;
+pub use identity::{DeviceIdentity, PublicKey};
+pub use pairing::{PairingMethod, PairingRequest, PairingResponse, PairingState};
+pub use qr::{NONCE_LEN, PairingBootstrap};
+pub use session::{SessionKeys, SessionSecurity};
+pub use trust::{InMemoryTrustStore, TrustEntry, TrustStore};

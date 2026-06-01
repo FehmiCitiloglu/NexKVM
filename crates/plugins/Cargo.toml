@@ -1,0 +1,30 @@
+[package]
+name = "coklu-plugins"
+description = "Plugin API and sandboxed runtime model for coklu."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Runtime engine features are policy/API gates for now; actual engine crates
+# (wasmtime, mlua/rlua) land behind these flags in the integration phase.
+runtime-wasm = []
+runtime-lua = []
+
+[dependencies]
+coklu-core.workspace = true
+coklu-protocol.workspace = true
+bytes.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

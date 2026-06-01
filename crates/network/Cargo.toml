@@ -1,0 +1,46 @@
+[package]
+name = "coklu-network"
+description = "Transport abstraction and selection (QUIC -> TCP -> WebRTC) for coklu."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Transport backends are gated so a build only pulls in the stacks it needs.
+# `transport-quic` is the preferred default for direct LAN links; `transport-tcp`
+# is the universal fallback; `transport-webrtc` enables NAT-traversal/remote mode
+# in a later phase.
+default = ["transport-tcp"]
+transport-quic = ["dep:quinn", "dep:rustls", "dep:rcgen"]
+transport-tcp = []
+transport-webrtc = []
+
+[dependencies]
+coklu-core.workspace = true
+coklu-protocol.workspace = true
+coklu-crypto.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "sync", "time", "rt"] }
+
+# QUIC backend (feature-gated).
+quinn = { version = "0.11", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+rcgen = { version = "0.13", optional = true }
+
+[dev-dependencies]
+coklu-input.workspace = true
+coklu-streaming.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
+
+[[bench]]
+name = "latency_suite"
+harness = false

@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/desktop",
+    "apps/mobile_future",
+    "crates/protocol",
+    "crates/core",
+    "crates/crypto",
+    "crates/network",
+    "crates/discovery",
+    "crates/input",
+    "crates/clipboard",
+    "crates/streaming",
+    "crates/plugins",
+    "crates/storage",
+    "crates/telemetry",
+    "crates/platform/platform-windows",
+    "crates/platform/platform-linux",
+    "crates/platform/platform-macos",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MPL-2.0"
+repository = "https://github.com/coklu/coklu"
+authors = ["coklu contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Shared dependency versions. Member crates opt in with `dep.workspace = true`,
+# keeping versions consistent across the monorepo.
+[workspace.dependencies]
+# Async runtime + utilities
+tokio = { version = "1", default-features = false }
+futures = "0.3"
+async-trait = "0.1"
+
+# Serialization / wire format
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+bytes = { version = "1", features = ["serde"] }
+
+# Errors
+thiserror = "1"
+anyhow = "1"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Identity / misc
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Networking helpers
+socket2 = { version = "0.5", features = ["all"] }
+mdns-sd = "0.11"
+
+# Compression (pure-Rust miniz_oxide backend; used for clipboard sync payloads)
+flate2 = "1"
+
+# Internal crates
+coklu-protocol = { path = "crates/protocol" }
+coklu-core = { path = "crates/core" }
+coklu-crypto = { path = "crates/crypto" }
+coklu-network = { path = "crates/network" }
+coklu-discovery = { path = "crates/discovery" }
+coklu-input = { path = "crates/input" }
+coklu-clipboard = { path = "crates/clipboard" }
+coklu-streaming = { path = "crates/streaming" }
+coklu-plugins = { path = "crates/plugins" }
+coklu-storage = { path = "crates/storage" }
+coklu-telemetry = { path = "crates/telemetry" }
+coklu-platform-windows = { path = "crates/platform/platform-windows" }
+coklu-platform-linux = { path = "crates/platform/platform-linux" }
+coklu-platform-macos = { path = "crates/platform/platform-macos" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,44 @@
+# Local sans-IO simulation environment for coklu developer workflows.
+# The desktop CLI validates and summarizes this file today; later phases can
+# feed it into simulated discovery, latency, workspace, and collaboration flows.
+
+[network]
+profile = "lan"
+rtt_ms = 8
+jitter_ms = 1
+loss = 0.0
+throughput_bps = 100000000
+
+[[device]]
+name = "desk-macos"
+os = "macos"
+role = "server"
+x = 0
+y = 0
+width = 1728
+height = 1117
+
+[[device]]
+name = "laptop-linux"
+os = "linux-wayland"
+role = "client"
+x = 1728
+y = 0
+width = 1920
+height = 1080
+
+[[device]]
+name = "tablet-future"
+os = "android"
+role = "client"
+x = -1200
+y = 100
+width = 1200
+height = 800
+
+[features]
+clipboard = true
+file_transfer = true
+screen_preview = true
+shared_cursor = true
+plugins = false

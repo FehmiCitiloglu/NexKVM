@@ -1,0 +1,16 @@
+[package]
+name = "coklu-platform-windows"
+description = "Windows platform backend for coklu (input, clipboard, display)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coklu-core.workspace = true
+async-trait.workspace = true
