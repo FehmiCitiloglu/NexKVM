@@ -30,6 +30,7 @@ mod audio;
 mod file_transfer_cipher;
 mod file_transfer_compression;
 mod file_transfer_queue;
+mod file_transfer_reassembly;
 mod file_transfer_session;
 mod file_transfer_types;
 mod screen;
@@ -38,7 +39,7 @@ pub use audio::{
     AudioBackend, AudioCodec, AudioDevice, AudioDeviceId, AudioDeviceProfile, AudioDeviceRole,
     AudioFormat, AudioFrame, AudioRoute, AudioRouteMode, AudioRouter, SampleFormat,
 };
-pub use file_transfer_cipher::{PlaintextTransferCipher, TransferCipher};
+pub use file_transfer_cipher::{PlaintextTransferCipher, SessionTransferCipher, TransferCipher};
 pub use file_transfer_compression::{
     CompressionStrategy, TransferCompression, TransferCompressionPolicy,
     compress as compress_transfer_bytes,
@@ -46,6 +47,7 @@ pub use file_transfer_compression::{
     decompress as decompress_transfer_bytes,
 };
 pub use file_transfer_queue::{QueueState, QueuedTransfer, TransferProgress, TransferQueue};
+pub use file_transfer_reassembly::{CompletedFile, TransferReassembler};
 pub use file_transfer_session::{
     DecodedChunk, TransferCheckpoint, TransferChunk, TransferReceiver, TransferSender,
 };
