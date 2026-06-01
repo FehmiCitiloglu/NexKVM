@@ -28,6 +28,7 @@ mod coalesce;
 mod injection;
 mod interpolation;
 mod keyboard;
+mod mobile;
 mod mode;
 mod monitor;
 mod monitor_scale;
@@ -46,6 +47,10 @@ pub use coalesce::InputCoalescer;
 pub use injection::{InjectionCommand, InjectionEngine};
 pub use interpolation::CursorInterpolator;
 pub use keyboard::{KeyForward, KeyboardShareController, Modifier, ModifierState};
+pub use mobile::{
+    GyroConfig, GyroMouse, MobileInputMode, Orientation, TouchPhase, TouchPoint, TouchSample,
+    TouchpadConfig, TouchpadTranslator,
+};
 pub use mode::{InputProfile, PointerMode};
 pub use monitor::{DisplayRect, MonitorId, MonitorLayout};
 pub use monitor_scale::{LocalPoint, LogicalSize, MonitorScale, ScaledLayout};
