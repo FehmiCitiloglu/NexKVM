@@ -1,13 +1,13 @@
 //! Remote-session establishment handshake for internet-based device linking.
 //!
-//! [`InternetConnectivityPlanner`](crate::InternetConnectivityPlanner) decides
+//! [`InternetConnectivityPlanner`] decides
 //! *how* to reach a peer (direct ICE vs relay); [`RemoteSessionPolicy`] decides
 //! *whether* a remote link is allowed. This module is the sans-IO glue that ties
 //! them together into an authenticated **offer/answer** exchange two devices run
 //! over a signaling channel (the relay control lane or any out-of-band path)
 //! before any media flows.
 //!
-//! Security boundary (mirrors [`docs/security.md`]): a remote session is only
+//! Security boundary (mirrors `docs/security.md`): a remote session is only
 //! established with an **already-trusted** device, and only when both sides
 //! require application-layer encryption *and* replay protection. The answerer
 //! validates the incoming offer against its local policy and **rejects**

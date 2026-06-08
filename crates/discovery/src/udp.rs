@@ -145,10 +145,10 @@ impl UdpDiscovery {
                 ticker.tick().await;
                 // Clone the current announcement out of the lock before any await.
                 let current = announcement.lock().expect("ann mutex poisoned").clone();
-                if let Some(ann) = current {
-                    if let Ok(bytes) = ann.encode() {
-                        let _ = socket.send_to(&bytes, broadcast_addr).await;
-                    }
+                if let Some(ann) = current
+                    && let Ok(bytes) = ann.encode()
+                {
+                    let _ = socket.send_to(&bytes, broadcast_addr).await;
                 }
             }
         });

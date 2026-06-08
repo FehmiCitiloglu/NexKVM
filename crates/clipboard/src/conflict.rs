@@ -94,10 +94,10 @@ impl ConflictResolver {
         fingerprint: ContentFingerprint,
         now_millis: u64,
     ) -> LocalDecision {
-        if let Some((_, fp)) = self.current {
-            if fp == fingerprint {
-                return LocalDecision::Suppress;
-            }
+        if let Some((_, fp)) = self.current
+            && fp == fingerprint
+        {
+            return LocalDecision::Suppress;
         }
         self.clock += 1;
         let stamp = OriginStamp {

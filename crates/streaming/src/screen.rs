@@ -574,13 +574,12 @@ fn select_encoder(
         HardwareEncoder::VideoToolbox,
     ];
 
-    if request.prefer_gpu {
-        if let Some(encoder) = hardware_order
+    if request.prefer_gpu
+        && let Some(encoder) = hardware_order
             .into_iter()
             .find(|encoder| sender.supports_encoder(*encoder))
-        {
-            return Ok(encoder);
-        }
+    {
+        return Ok(encoder);
     }
 
     if request.allow_software_fallback && sender.supports_encoder(HardwareEncoder::Software) {
@@ -597,10 +596,10 @@ fn select_memory(
     encoder: HardwareEncoder,
     require_zero_copy: bool,
 ) -> Result<GpuMemoryKind, ScreenError> {
-    if encoder.is_gpu_accelerated() {
-        if let Some(memory) = sender.memory_kinds.iter().copied().find(|m| m.is_gpu()) {
-            return Ok(memory);
-        }
+    if encoder.is_gpu_accelerated()
+        && let Some(memory) = sender.memory_kinds.iter().copied().find(|m| m.is_gpu())
+    {
+        return Ok(memory);
     }
 
     if sender.supports_memory(GpuMemoryKind::System) && !require_zero_copy {

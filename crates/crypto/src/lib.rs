@@ -1,10 +1,10 @@
 //! Pairing & security model for coklu.
 //!
 //! This crate defines the *model* — the types and trait boundaries — for how
-//! devices establish trust and secure a session. Concrete cryptographic
-//! backends (X25519 key agreement, Ed25519 signatures, ChaCha20-Poly1305 AEAD)
-//! are introduced behind feature flags in a later phase; the foundation fixes
-//! the interfaces so the rest of the platform can be built against them.
+//! devices establish trust and secure a session. The session layer includes a
+//! ChaCha20-Poly1305 AEAD implementation keyed from authenticated key-agreement
+//! output; concrete platform handshakes still supply and authenticate that
+//! shared secret before constructing a session.
 //!
 //! # Threat model & guarantees (target)
 //! - **Confidentiality + integrity** of all traffic via an AEAD session cipher
@@ -33,5 +33,5 @@ pub use error::CryptoError;
 pub use identity::{DeviceIdentity, PublicKey};
 pub use pairing::{PairingMethod, PairingRequest, PairingResponse, PairingState};
 pub use qr::{NONCE_LEN, PairingBootstrap};
-pub use session::{SessionKeys, SessionSecurity};
+pub use session::{AeadSessionSecurity, SessionKeys, SessionSecurity};
 pub use trust::{InMemoryTrustStore, TrustEntry, TrustStore};

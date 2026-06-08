@@ -4,7 +4,7 @@ Thanks for helping build coklu. The project is still in a foundation phase, so h
 
 ## Local Setup
 
-Install Rust 1.85 or newer. Then run:
+Install Rust 1.88 or newer. Then run:
 
 ```sh
 cargo test --workspace --all-features

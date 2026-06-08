@@ -63,10 +63,10 @@ impl MdnsDiscovery {
         // Drain resolution events into the registry.
         tokio::spawn(async move {
             while let Ok(event) = receiver.recv_async().await {
-                if let ServiceEvent::ServiceResolved(info) = event {
-                    if let Some(device) = resolved_to_device(&info) {
-                        reg.observe(device, Instant::now());
-                    }
+                if let ServiceEvent::ServiceResolved(info) = event
+                    && let Some(device) = resolved_to_device(&info)
+                {
+                    reg.observe(device, Instant::now());
                 }
             }
         });
@@ -87,10 +87,10 @@ impl MdnsDiscovery {
 
 impl Drop for MdnsDiscovery {
     fn drop(&mut self) {
-        if let Ok(name) = self.registered.lock() {
-            if let Some(fullname) = name.as_ref() {
-                let _ = self.daemon.unregister(fullname);
-            }
+        if let Ok(name) = self.registered.lock()
+            && let Some(fullname) = name.as_ref()
+        {
+            let _ = self.daemon.unregister(fullname);
         }
         let _ = self.daemon.shutdown();
     }

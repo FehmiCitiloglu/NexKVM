@@ -55,8 +55,13 @@ Running `cargo run -p coklu` with no subcommand starts the daemon.
 ## CI And Release
 
 - `.github/workflows/ci.yml` runs format, clippy, tests, release builds, and benchmark smoke checks across Linux, macOS, and Windows.
+- The CI dependency-audit job runs `cargo deny check advisories bans licenses sources` using `deny.toml`.
 - `.github/workflows/fuzz.yml` runs scheduled/manual protocol fuzz smoke tests.
 - `.github/workflows/release.yml` builds release artifacts on version tags and publishes them to GitHub Releases.
+
+UDP discovery tests open local sockets. In restricted sandboxes they can fail
+with `Operation not permitted`; rerun the same target on a normal developer
+machine or CI runner before treating the failure as a product regression.
 
 ## API Docs
 

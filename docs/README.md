@@ -10,6 +10,7 @@ This directory collects the stable design contracts for coklu. Research notes li
 - [Plugins](plugins.md): plugin manifests, runtime model, sandbox profiles, marketplace policy, and hot reload.
 - [API Documentation](api.md): how to build and navigate Rust API docs for the workspace.
 - [Tooling](tooling.md): integration tests, fuzzing, benchmarks, CLI tools, simulation, CI, and release workflows.
+- [Release Readiness](release-readiness.md): production gates, security requirements, platform smoke checks, and artifact expectations.
 
 ## Contribution Entry Point
 
