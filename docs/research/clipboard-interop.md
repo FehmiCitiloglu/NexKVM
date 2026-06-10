@@ -46,7 +46,7 @@ Putting images/files on the lossy broadcast event bus is wrong. Two rules:
    - Wayland/X11: data offers are inherently pull-based — the source streams data
      to the fd only when a target requests it.
 
-   coklu mirrors this across devices: copying advertises *available types +
+   nexkvm mirrors this across devices: copying advertises *available types +
    size*; the receiving device requests bytes on paste. This avoids syncing
    multi-MB images that are never pasted.
 

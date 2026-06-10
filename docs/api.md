@@ -11,7 +11,7 @@ cargo doc --workspace --all-features --no-deps
 Open:
 
 ```text
-target/doc/coklu/index.html
+target/doc/nexkvm/index.html
 ```
 
 For strict link checking in CI/local validation:
@@ -24,16 +24,16 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
 | Crate | API Focus |
 | --- | --- |
-| `coklu-core` | `EventBus`, platform traits, workspace model, collaboration sessions. |
-| `coklu-protocol` | `FrameCodec`, `Envelope`, `MessageKind`, `VersionRange`. |
-| `coklu-crypto` | pairing, trust, session-security traits/models. |
-| `coklu-network` | transport traits, sessions, heartbeat, RTT/quality, zero-copy packets. |
-| `coklu-input` | `InputEvent`, capture/inject traits, topology, batching, polling, prediction. |
-| `coklu-clipboard` | clipboard sync payload/history/conflict/encryption models. |
-| `coklu-streaming` | file transfer, audio routing, screen streaming, stream traits. |
-| `coklu-plugins` | plugin traits, manifests, permissions, runtime/sandbox/marketplace/hot reload. |
-| `coklu-storage` | TOML config and trust persistence. |
-| `coklu-telemetry` | tracing configuration. |
+| `nexkvm-core` | `EventBus`, platform traits, workspace model, collaboration sessions. |
+| `nexkvm-protocol` | `FrameCodec`, `Envelope`, `MessageKind`, `VersionRange`. |
+| `nexkvm-crypto` | pairing, trust, session-security traits/models. |
+| `nexkvm-network` | transport traits, sessions, heartbeat, RTT/quality, zero-copy packets. |
+| `nexkvm-input` | `InputEvent`, capture/inject traits, topology, batching, polling, prediction. |
+| `nexkvm-clipboard` | clipboard sync payload/history/conflict/encryption models. |
+| `nexkvm-streaming` | file transfer, audio routing, screen streaming, stream traits. |
+| `nexkvm-plugins` | plugin traits, manifests, permissions, runtime/sandbox/marketplace/hot reload. |
+| `nexkvm-storage` | TOML config and trust persistence. |
+| `nexkvm-telemetry` | tracing configuration. |
 
 ## Documentation Style
 
@@ -51,6 +51,6 @@ Useful commands:
 
 ```sh
 cargo test --workspace --all-features
-cargo test -p coklu-network --test protocol_pipeline
-cargo run -p coklu -- doctor
+cargo test -p nexkvm-network --test protocol_pipeline
+cargo run -p nexkvm -- doctor
 ```

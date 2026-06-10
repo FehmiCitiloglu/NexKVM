@@ -1,6 +1,6 @@
 [package]
-name = "coklu-network"
-description = "Transport abstraction and selection (QUIC -> TCP -> WebRTC) for coklu."
+name = "nexkvm-network"
+description = "Transport abstraction and selection (QUIC -> TCP -> WebRTC) for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,9 +22,9 @@ transport-tcp = []
 transport-webrtc = []
 
 [dependencies]
-coklu-core.workspace = true
-coklu-protocol.workspace = true
-coklu-crypto.workspace = true
+nexkvm-core.workspace = true
+nexkvm-protocol.workspace = true
+nexkvm-crypto.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
@@ -37,8 +37,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rcgen = { version = "0.13", optional = true }
 
 [dev-dependencies]
-coklu-input.workspace = true
-coklu-streaming.workspace = true
+nexkvm-input.workspace = true
+nexkvm-streaming.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
 

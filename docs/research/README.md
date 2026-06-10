@@ -1,4 +1,4 @@
-# coklu Platform Research
+# nexkvm Platform Research
 
 Research notes for the **Platform Research** roadmap phase. Each document
 de-risks a later implementation phase and maps findings onto the trait

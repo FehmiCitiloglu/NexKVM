@@ -13,8 +13,8 @@
 #![cfg(target_os = "macos")]
 
 use async_trait::async_trait;
-use coklu_core::platform::{PlatformBackend, PlatformCapabilities};
-use coklu_core::{CoreError, OsKind};
+use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
+use nexkvm_core::{CoreError, OsKind};
 
 pub mod inject;
 

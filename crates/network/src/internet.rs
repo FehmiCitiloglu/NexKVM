@@ -10,7 +10,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 use serde::{Deserialize, Serialize};
 
 /// ICE/STUN/TURN server used by the WebRTC backend.
@@ -80,7 +80,7 @@ pub enum CandidateKind {
     Host,
     /// Server-reflexive candidate from STUN.
     ServerReflexive,
-    /// Relay candidate through TURN/coklu relay.
+    /// Relay candidate through TURN/nexkvm relay.
     Relay,
 }
 

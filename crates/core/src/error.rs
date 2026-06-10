@@ -7,11 +7,11 @@ use thiserror::Error;
 pub enum CoreError {
     /// A protocol-level failure bubbled up.
     #[error(transparent)]
-    Protocol(#[from] coklu_protocol::ProtocolError),
+    Protocol(#[from] nexkvm_protocol::ProtocolError),
 
     /// A security/pairing failure bubbled up.
     #[error(transparent)]
-    Crypto(#[from] coklu_crypto::CryptoError),
+    Crypto(#[from] nexkvm_crypto::CryptoError),
 
     /// The event bus has no remaining receivers (all consumers dropped).
     #[error("event bus has no active subscribers")]

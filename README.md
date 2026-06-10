@@ -1,6 +1,6 @@
-# coklu
+# NexKVM
 
-coklu is an open-source, cross-platform device continuity platform inspired by Barrier, Synergy, Apple Continuity, KDE Connect, Mouse Without Borders, and Universal Control.
+NexKVM is an open-source, cross-platform device continuity platform inspired by Barrier, Synergy, Apple Continuity, KDE Connect, Mouse Without Borders, and Universal Control.
 
 The project is currently in a foundation phase: the repository emphasizes portable Rust models, safe trait boundaries, protocol/security contracts, and testable Sans-IO state machines before platform-specific native integrations land.
 
@@ -32,12 +32,12 @@ The project is currently in a foundation phase: the repository emphasizes portab
 ```sh
 cargo test --workspace --all-features
 cargo clippy --workspace --all-targets --all-features
-cargo run -p coklu -- doctor
-cargo run -p coklu -- protocol
-cargo run -p coklu -- simulate tools/sim/local-workspace.toml
+cargo run -p nexkvm -- doctor
+cargo run -p nexkvm -- protocol
+cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 ```
 
-Running `cargo run -p coklu` with no subcommand starts the desktop daemon and waits for shutdown.
+Running `cargo run -p nexkvm` with no subcommand starts the desktop daemon and waits for shutdown.
 
 ## Documentation
 

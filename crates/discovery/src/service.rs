@@ -13,10 +13,10 @@
 //! targets over a bounded channel and exposes
 //! [`report_success`](DiscoveryService::report_success) /
 //! [`report_failure`](DiscoveryService::report_failure) so the driver closes the
-//! loop. This keeps discovery decoupled from `coklu-network` and unit-testable.
+//! loop. This keeps discovery decoupled from `nexkvm-network` and unit-testable.
 //!
 //! Trust is injected via [`TrustOracle`] rather than depending on
-//! `coklu-crypto`'s `TrustStore` directly, so discovery stays decoupled from the
+//! `nexkvm-crypto`'s `TrustStore` directly, so discovery stays decoupled from the
 //! pairing layer and only needs a fingerprint match. The advertised fingerprint
 //! is *not* proof of identity — it only gates *which* peers we attempt to redial;
 //! the cryptographic handshake still authenticates the peer after connecting.
@@ -26,7 +26,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use coklu_core::identity::{DeviceId, DeviceInfo};
+use nexkvm_core::identity::{DeviceId, DeviceInfo};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -219,7 +219,7 @@ impl Drop for DiscoveryService {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use coklu_core::identity::{DeviceInfo, OsKind};
+    use nexkvm_core::identity::{DeviceInfo, OsKind};
 
     /// A backend returning a fixed set of peers, recording the advertised addr.
     struct StubDiscovery {

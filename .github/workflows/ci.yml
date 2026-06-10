@@ -48,7 +48,7 @@ jobs:
           toolchain: 1.88.0
       - uses: Swatinem/rust-cache@v2
       - name: Run latency benchmark harness
-        run: cargo bench -p coklu-network --bench latency_suite
+        run: cargo bench -p nexkvm-network --bench latency_suite
 
   dependency-audit:
     name: dependency audit

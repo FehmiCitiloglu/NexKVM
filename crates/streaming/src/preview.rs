@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use crate::screen::{CaptureSource, CaptureSourceId, EncodedScreenFrame, ScreenStreamRequest};
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 /// Tuning for thumbnail freshness, hover debounce, and cache size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

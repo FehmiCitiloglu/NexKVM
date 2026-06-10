@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 use crate::DiscoveredDevice;
 
@@ -90,7 +90,7 @@ impl DiscoveryRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_core::identity::{DeviceInfo, OsKind};
+    use nexkvm_core::identity::{DeviceInfo, OsKind};
     use std::net::SocketAddr;
 
     fn device(name: &str) -> DiscoveredDevice {

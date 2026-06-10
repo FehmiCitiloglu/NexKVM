@@ -1,6 +1,6 @@
 //! QR-code pairing bootstrap.
 //!
-//! To pair, the initiator renders a [`PairingBootstrap`] as a compact `coklu://`
+//! To pair, the initiator renders a [`PairingBootstrap`] as a compact `nexkvm://`
 //! URI inside a QR code; the responder scans it to learn exactly where to
 //! connect and which key to expect. The bootstrap carries:
 //!
@@ -17,7 +17,7 @@
 //! and is single-use. Rendering the QR image is a UI concern; this module only
 //! defines the payload and its encoding, dependency-free.
 //!
-//! The wire form is `coklu://pair/v1/<hex>`, where `<hex>` is a small binary
+//! The wire form is `nexkvm://pair/v1/<hex>`, where `<hex>` is a small binary
 //! record. Hex keeps the payload URL-safe and dependency-free; pairing payloads
 //! are tiny, so the 2x size overhead is irrelevant for QR capacity.
 
@@ -25,7 +25,7 @@ use crate::CryptoError;
 use crate::identity::PublicKey;
 
 /// URI scheme + path prefix identifying a v1 pairing bootstrap.
-const URI_PREFIX: &str = "coklu://pair/v1/";
+const URI_PREFIX: &str = "nexkvm://pair/v1/";
 
 /// Length of the single-use pairing nonce, in bytes.
 pub const NONCE_LEN: usize = 32;
@@ -60,13 +60,13 @@ impl PairingBootstrap {
         }
     }
 
-    /// Encode to a scannable `coklu://pair/v1/<hex>` URI.
+    /// Encode to a scannable `nexkvm://pair/v1/<hex>` URI.
     #[must_use]
     pub fn to_uri(&self) -> String {
         format!("{URI_PREFIX}{}", hex_encode(&self.encode_binary()))
     }
 
-    /// Parse a bootstrap from its `coklu://pair/v1/<hex>` URI form.
+    /// Parse a bootstrap from its `nexkvm://pair/v1/<hex>` URI form.
     ///
     /// # Errors
     /// Returns [`CryptoError::Pairing`] if the scheme/prefix is wrong or the
@@ -194,7 +194,7 @@ mod tests {
     fn uri_round_trips() {
         let boot = sample();
         let uri = boot.to_uri();
-        assert!(uri.starts_with("coklu://pair/v1/"));
+        assert!(uri.starts_with("nexkvm://pair/v1/"));
         let parsed = PairingBootstrap::from_uri(&uri).unwrap();
         assert_eq!(parsed, boot);
     }
@@ -216,6 +216,6 @@ mod tests {
 
     #[test]
     fn rejects_non_hex_payload() {
-        assert!(PairingBootstrap::from_uri("coklu://pair/v1/zzzz").is_err());
+        assert!(PairingBootstrap::from_uri("nexkvm://pair/v1/zzzz").is_err());
     }
 }

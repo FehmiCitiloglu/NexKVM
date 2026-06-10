@@ -148,7 +148,7 @@ mod tests {
     use crate::file_transfer_types::{
         TransferEntry, TransferFileData, TransferId, TransferManifest, TransferSource,
     };
-    use coklu_core::identity::DeviceId;
+    use nexkvm_core::identity::DeviceId;
 
     fn manifest() -> TransferManifest {
         TransferManifest::new(

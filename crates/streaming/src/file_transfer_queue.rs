@@ -167,7 +167,7 @@ impl TransferQueue {
 
 #[cfg(test)]
 mod tests {
-    use coklu_core::identity::DeviceId;
+    use nexkvm_core::identity::DeviceId;
 
     use super::*;
     use crate::file_transfer_types::{TransferEntry, TransferSource};

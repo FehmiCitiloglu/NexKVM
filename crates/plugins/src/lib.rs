@@ -1,12 +1,12 @@
 //! Plugin API & runtime model.
 //!
 //! # Architecture
-//! Plugins extend coklu (AI clipboard actions, custom sync handlers, automation)
+//! Plugins extend nexkvm (AI clipboard actions, custom sync handlers, automation)
 //! without touching core. Two key boundaries:
 //!
 //! - [`Plugin`] — the lifecycle + event-handling trait every plugin implements.
 //!   It is intentionally event-driven: plugins observe and emit
-//!   [`coklu_core::Event`]s rather than calling subsystems directly, preserving
+//!   [`nexkvm_core::Event`]s rather than calling subsystems directly, preserving
 //!   the decoupled bus architecture and making permissions enforceable.
 //! - [`PluginCapabilities`] — an explicit, least-privilege permission grant. A
 //!   plugin can only touch the surfaces it declared in its [`PluginManifest`]

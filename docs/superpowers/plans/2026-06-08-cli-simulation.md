@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `coklu simulate [toml]` parse a typed local workspace fixture, validate devices/connections, and print a deterministic simulation report.
+**Goal:** Make `nexkvm simulate [toml]` parse a typed local workspace fixture, validate devices/connections, and print a deterministic simulation report.
 
 **Architecture:** Add a focused `apps/desktop/src/simulation.rs` module for TOML parsing, validation, and report data. Keep `apps/desktop/src/cli.rs` as the pure renderer and `apps/desktop/src/main.rs` as the I/O dispatcher. Update the sample fixture and CLI integration tests to lock the user-facing output.
 
-**Tech Stack:** Rust 2024, Cargo workspace, `serde`, `toml`, `anyhow`, existing `coklu` desktop binary tests.
+**Tech Stack:** Rust 2024, Cargo workspace, `serde`, `toml`, `anyhow`, existing `nexkvm` desktop binary tests.
 
 ---
 
@@ -136,7 +136,7 @@ to = "tablet"
 Run:
 
 ```sh
-cargo test -p coklu simulation::tests --all-features
+cargo test -p nexkvm simulation::tests --all-features
 ```
 
 Expected: compile failure because `report_from_str`, `ConnectionStatus`, and report types are not defined.
@@ -314,7 +314,7 @@ fn validate_endpoint(
 Run:
 
 ```sh
-cargo test -p coklu simulation::tests --all-features
+cargo test -p nexkvm simulation::tests --all-features
 ```
 
 Expected: all `simulation::tests` pass.
@@ -372,7 +372,7 @@ Then add this test inside `#[cfg(test)] mod tests`:
 
         let rendered = format_simulation_report("tools/sim/local-workspace.toml", &report);
 
-        assert!(rendered.contains("coklu simulation"));
+        assert!(rendered.contains("nexkvm simulation"));
         assert!(rendered.contains("config: tools/sim/local-workspace.toml"));
         assert!(rendered.contains("  - desktop (linux) trusted address=127.0.0.1:4102"));
         assert!(rendered.contains("  - laptop (macos) untrusted address=127.0.0.1:4101"));
@@ -387,7 +387,7 @@ Then add this test inside `#[cfg(test)] mod tests`:
 Run:
 
 ```sh
-cargo test -p coklu cli::tests::simulation_report_is_rendered_without_trailing_blank_line --all-features
+cargo test -p nexkvm cli::tests::simulation_report_is_rendered_without_trailing_blank_line --all-features
 ```
 
 Expected: compile failure because `format_simulation_report` is not defined.
@@ -400,7 +400,7 @@ In `apps/desktop/src/cli.rs`, add this function after `format_pairing`:
 #[must_use]
 pub fn format_simulation_report(path: &str, report: &SimulationReport) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "coklu simulation");
+    let _ = writeln!(out, "nexkvm simulation");
     let _ = writeln!(out, "config: {path}");
     let _ = writeln!(out);
     let _ = writeln!(out, "devices:");
@@ -450,7 +450,7 @@ pub fn format_simulation_report(path: &str, report: &SimulationReport) -> String
 Run:
 
 ```sh
-cargo test -p coklu cli::tests::simulation_report_is_rendered_without_trailing_blank_line --all-features
+cargo test -p nexkvm cli::tests::simulation_report_is_rendered_without_trailing_blank_line --all-features
 ```
 
 Expected: the renderer test passes.
@@ -476,14 +476,14 @@ In `apps/desktop/tests/cli.rs`, add this test:
 ```rust
 #[test]
 fn simulate_reports_devices_and_connections() {
-    let output = coklu()
+    let output = nexkvm()
         .args(["simulate", "tools/sim/local-workspace.toml"])
         .output()
-        .expect("run coklu simulate");
+        .expect("run nexkvm simulate");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("coklu simulation"));
+    assert!(stdout.contains("nexkvm simulation"));
     assert!(stdout.contains("devices:"));
     assert!(stdout.contains("connections:"));
     assert!(stdout.contains("summary:"));
@@ -495,7 +495,7 @@ fn simulate_reports_devices_and_connections() {
 Run:
 
 ```sh
-cargo test -p coklu --test cli simulate_reports_devices_and_connections --all-features
+cargo test -p nexkvm --test cli simulate_reports_devices_and_connections --all-features
 ```
 
 Expected: failure because the current fixture lacks required fields and/or the command still prints the old scaffold output.
@@ -525,7 +525,7 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
 Run:
 
 ```sh
-cargo test -p coklu --test cli simulate_reports_devices_and_connections --all-features
+cargo test -p nexkvm --test cli simulate_reports_devices_and_connections --all-features
 ```
 
 Expected: still fails with a clear validation error for missing required fixture fields.
@@ -551,7 +551,7 @@ apps/desktop/tests/cli.rs
 Replace `tools/sim/local-workspace.toml` with:
 
 ```toml
-# Local sans-IO simulation environment for coklu developer workflows.
+# Local sans-IO simulation environment for nexkvm developer workflows.
 # The desktop CLI validates and summarizes this file today; later phases can
 # feed it into simulated discovery, latency, workspace, and collaboration flows.
 
@@ -623,7 +623,7 @@ plugins = false
 Run:
 
 ```sh
-cargo test -p coklu --test cli simulate_reports_devices_and_connections --all-features
+cargo test -p nexkvm --test cli simulate_reports_devices_and_connections --all-features
 ```
 
 Expected: test passes.
@@ -635,14 +635,14 @@ Update the integration test to assert concrete output:
 ```rust
 #[test]
 fn simulate_reports_devices_and_connections() {
-    let output = coklu()
+    let output = nexkvm()
         .args(["simulate", "tools/sim/local-workspace.toml"])
         .output()
-        .expect("run coklu simulate");
+        .expect("run nexkvm simulate");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("coklu simulation"));
+    assert!(stdout.contains("nexkvm simulation"));
     assert!(stdout.contains("  - desk-macos (macos) trusted address=127.0.0.1:4101"));
     assert!(stdout.contains("  - laptop-linux (linux-wayland) trusted address=127.0.0.1:4102"));
     assert!(stdout.contains("  - tablet-future (android) untrusted address=127.0.0.1:4103"));
@@ -658,7 +658,7 @@ fn simulate_reports_devices_and_connections() {
 Run:
 
 ```sh
-cargo test -p coklu --test cli simulate_reports_devices_and_connections --all-features
+cargo test -p nexkvm --test cli simulate_reports_devices_and_connections --all-features
 ```
 
 Expected: test passes with concrete fixture output.
@@ -682,7 +682,7 @@ git commit -m "feat: wire local simulation command"
 Run:
 
 ```sh
-cargo test -p coklu --all-features
+cargo test -p nexkvm --all-features
 ```
 
 Expected: all desktop package tests pass.
@@ -744,13 +744,13 @@ Expected: only simulation-related files changed by these tasks, plus any unrelat
 Run:
 
 ```sh
-cargo run -p coklu -- simulate tools/sim/local-workspace.toml
+cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 ```
 
 Expected output contains:
 
 ```text
-coklu simulation
+nexkvm simulation
 config: tools/sim/local-workspace.toml
 devices:
 connections:

@@ -1,15 +1,15 @@
-; NSIS installer for coklu desktop daemon (minimal MVP packaging slice).
+; NSIS installer for nexkvm desktop daemon (minimal MVP packaging slice).
 ; Builds a per-user installer that lays down the binary and Start Menu shortcut.
 
 !include "MUI2.nsh"
 
-!define APP_NAME "coklu"
-!define COMPANY "coklu contributors"
-!define EXE_NAME "coklu.exe"
-!define ICON_PATH "..\\..\\packaging\\windows\\coklu.ico"
+!define APP_NAME "nexkvm"
+!define COMPANY "nexkvm contributors"
+!define EXE_NAME "nexkvm.exe"
+!define ICON_PATH "..\\..\\packaging\\windows\\nexkvm.ico"
 
 Name "${APP_NAME}"
-OutFile "..\\..\\target\\package\\coklu-windows-x64-setup.exe"
+OutFile "..\\..\\target\\package\\nexkvm-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\\${APP_NAME}"
 RequestExecutionLevel user
 

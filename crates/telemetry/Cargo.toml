@@ -1,6 +1,6 @@
 [package]
-name = "coklu-telemetry"
-description = "Structured logging, tracing, and diagnostics initialization for coklu."
+name = "nexkvm-telemetry"
+description = "Structured logging, tracing, and diagnostics initialization for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

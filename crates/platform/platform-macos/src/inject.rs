@@ -13,7 +13,7 @@
 //! table (plus layout via `UCKeyTranslate`); this module passes the keycode
 //! through unchanged and records the intended event type.
 
-use coklu_input::{InjectionCommand, MouseButton};
+use nexkvm_input::{InjectionCommand, MouseButton};
 
 /// Quartz `CGEventType` values relevant to injection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

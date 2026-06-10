@@ -3,7 +3,7 @@
 Informs: `crates/input` (`InputCapture`, `InputInjector`, `InputEvent`) and the
 `platform-*` backends (`PlatformBackend`, `PlatformCapabilities`).
 
-coklu needs two capabilities per platform:
+nexkvm needs two capabilities per platform:
 
 - **Capture** — observe local pointer/keyboard events, and on the *active edge*
   **suppress** them locally while the user is driving a remote device
@@ -33,7 +33,7 @@ The hard part everywhere is **suppression** (consuming the local event) and
   normalized to `0..=65535` over the virtual desktop — maps cleanly from our
   normalized `f64`.
 - **UIPI constraint**: a process cannot `SendInput` into a window of higher
-  integrity level. Injection into elevated/admin windows requires the coklu
+  integrity level. Injection into elevated/admin windows requires the nexkvm
   process to run at matching integrity (or with `uiAccess`, which needs signing +
   install in a trusted location). Surface this via `can_inject_input`.
 
@@ -104,7 +104,7 @@ is no equivalent of `XTEST`. Sanctioned paths:
 - **`xdg-desktop-portal`**:
   - `RemoteDesktop` portal → inject pointer/keyboard (backed by libei).
   - `InputCapture` portal (newer) → **edge-based capture** for KVM use cases.
-    This is the correct, supported route for coklu's follow-mouse model.
+    This is the correct, supported route for nexkvm's follow-mouse model.
 - All require a portal interaction/grant; support **varies by compositor**
   (GNOME/Mutter, KDE/KWin, wlroots differ in maturity).
 

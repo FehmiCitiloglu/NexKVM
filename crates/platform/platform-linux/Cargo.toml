@@ -1,6 +1,6 @@
 [package]
-name = "coklu-platform-linux"
-description = "Linux platform backend for coklu (input, clipboard, display)."
+name = "nexkvm-platform-linux"
+description = "Linux platform backend for nexkvm (input, clipboard, display)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,6 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-coklu-core.workspace = true
-coklu-input.workspace = true
+nexkvm-core.workspace = true
+nexkvm-input.workspace = true
 async-trait.workspace = true

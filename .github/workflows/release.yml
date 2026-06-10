@@ -38,10 +38,10 @@ jobs:
         shell: bash
         run: |
           chmod +x scripts/package-linux.sh
-          COKLU_VERSION="${GITHUB_REF_NAME#v}" scripts/package-linux.sh
+          NEXKVM_VERSION="${GITHUB_REF_NAME#v}" scripts/package-linux.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: coklu-linux-packages
+          name: nexkvm-linux-packages
           path: |
             target/package/*.deb
             target/package/*.rpm
@@ -64,10 +64,10 @@ jobs:
           APPLE_NOTARY_PROFILE: ${{ secrets.APPLE_NOTARY_PROFILE }}
         run: |
           chmod +x scripts/package-macos.sh
-          COKLU_VERSION="${GITHUB_REF_NAME#v}" scripts/package-macos.sh
+          NEXKVM_VERSION="${GITHUB_REF_NAME#v}" scripts/package-macos.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: coklu-macos-package
+          name: nexkvm-macos-package
           path: |
             target/package/*.zip
 
@@ -90,8 +90,8 @@ jobs:
         run: ./scripts/package-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: coklu-windows-installer
-          path: target/package/coklu-windows-x64-setup.exe
+          name: nexkvm-windows-installer
+          path: target/package/nexkvm-windows-x64-setup.exe
 
   github-release:
     if: startsWith(github.ref, 'refs/tags/')

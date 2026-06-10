@@ -8,8 +8,8 @@ Set-Location $root
 
 New-Item -ItemType Directory -Path target/package -Force | Out-Null
 
-$logoPng = Join-Path $root "packaging/assets/coklu-logo.png"
-$iconIco = Join-Path $root "packaging/windows/coklu.ico"
+$logoPng = Join-Path $root "packaging/assets/nexkvm-logo.png"
+$iconIco = Join-Path $root "packaging/windows/nexkvm.ico"
 
 if (-not (Test-Path $logoPng)) {
   throw "Logo not found at $logoPng"
@@ -25,7 +25,7 @@ Write-Host "Generating installer icon from logo..."
 magick convert $logoPng -background none -define icon:auto-resize=256,128,64,48,32,16 $iconIco
 
 Write-Host "Building release binary..."
-cargo build -p coklu --release
+cargo build -p nexkvm --release
 
 if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
  echo "makensis not found. Installing NSIS"
@@ -36,4 +36,4 @@ if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
 Write-Host "Building NSIS installer..."
 makensis packaging/windows/installer.nsi | Out-Host
 
-Write-Host "Windows package ready: target/package/coklu-windows-x64-setup.exe"
+Write-Host "Windows package ready: target/package/nexkvm-windows-x64-setup.exe"

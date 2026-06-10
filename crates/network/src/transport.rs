@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
-use coklu_protocol::Envelope;
+use nexkvm_protocol::Envelope;
 
 use crate::error::NetworkError;
 

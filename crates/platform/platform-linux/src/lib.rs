@@ -1,7 +1,7 @@
 //! Linux platform backend.
 //!
 //! Linux support has to account for two display worlds:
-//! - **Wayland**: native global input is intentionally forbidden. coklu must use
+//! - **Wayland**: native global input is intentionally forbidden. nexkvm must use
 //!   compositor-mediated portals (`RemoteDesktop`, `InputCapture`) and PipeWire
 //!   portal streams for screen/audio-related flows. Support varies by GNOME,
 //!   KDE/KWin, and wlroots compositors.
@@ -14,8 +14,8 @@
 //! async paths here.
 
 use async_trait::async_trait;
-use coklu_core::platform::{PlatformBackend, PlatformCapabilities};
-use coklu_core::{CoreError, OsKind};
+use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
+use nexkvm_core::{CoreError, OsKind};
 
 pub mod inject;
 
@@ -252,14 +252,14 @@ impl LinuxEnvironment {
             xdg_session_desktop: std::env::var("XDG_SESSION_DESKTOP").ok(),
             desktop_session: std::env::var("DESKTOP_SESSION").ok(),
             pipewire_remote: std::env::var("PIPEWIRE_REMOTE").ok(),
-            portal_desktop: parse_bool_env("COKLU_PORTAL_DESKTOP"),
-            portal_remote_desktop: parse_bool_env("COKLU_PORTAL_REMOTE_DESKTOP"),
-            portal_input_capture: parse_bool_env("COKLU_PORTAL_INPUT_CAPTURE"),
-            portal_screen_cast: parse_bool_env("COKLU_PORTAL_SCREENCAST"),
-            portal_clipboard: parse_bool_env("COKLU_PORTAL_CLIPBOARD"),
-            handheld_kind: std::env::var("COKLU_LINUX_HANDHELD").ok(),
+            portal_desktop: parse_bool_env("NEXKVM_PORTAL_DESKTOP"),
+            portal_remote_desktop: parse_bool_env("NEXKVM_PORTAL_REMOTE_DESKTOP"),
+            portal_input_capture: parse_bool_env("NEXKVM_PORTAL_INPUT_CAPTURE"),
+            portal_screen_cast: parse_bool_env("NEXKVM_PORTAL_SCREENCAST"),
+            portal_clipboard: parse_bool_env("NEXKVM_PORTAL_CLIPBOARD"),
+            handheld_kind: std::env::var("NEXKVM_LINUX_HANDHELD").ok(),
             steam_game_mode: parse_bool_env("STEAM_GAME_MODE")
-                .or_else(|| parse_bool_env("COKLU_STEAM_GAME_MODE")),
+                .or_else(|| parse_bool_env("NEXKVM_STEAM_GAME_MODE")),
         }
     }
 

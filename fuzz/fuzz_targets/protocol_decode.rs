@@ -1,8 +1,8 @@
 #![no_main]
 
 use bytes::{Bytes, BytesMut};
-use coklu_network::wire::decode_envelope;
-use coklu_protocol::FrameCodec;
+use nexkvm_network::wire::decode_envelope;
+use nexkvm_protocol::FrameCodec;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

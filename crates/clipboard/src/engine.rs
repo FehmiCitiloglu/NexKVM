@@ -14,7 +14,7 @@
 //! reads/writes and never holds a lock across `.await`: each method awaits the
 //! platform backend, then runs the pure sync/history steps synchronously.
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 use crate::content::ClipboardSnapshot;
 use crate::history::{ClipboardHistory, HistoryConfig};

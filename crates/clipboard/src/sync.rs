@@ -1,7 +1,7 @@
 //! Clipboard sync wire message and the end-to-end pipeline.
 //!
 //! [`ClipboardUpdate`] is the body carried under
-//! [`MessageKind::Clipboard`](coklu_protocol::MessageKind::Clipboard). The
+//! [`MessageKind::Clipboard`](nexkvm_protocol::MessageKind::Clipboard). The
 //! [`ClipboardSync`] state machine composes the other modules into the two
 //! directions of a sync:
 //!
@@ -13,11 +13,11 @@
 //! Encryption wraps the *compressed* bytes (compress-then-encrypt) so the cipher
 //! never sees exploitable plaintext redundancy and the transport sees only
 //! sealed output. The orchestration layer feeds outbound updates onto the
-//! [`MessageKind::Clipboard`](coklu_protocol::MessageKind::Clipboard) lane and
+//! [`MessageKind::Clipboard`](nexkvm_protocol::MessageKind::Clipboard) lane and
 //! applies returned inbound snapshots to the platform clipboard.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 use uuid::Uuid;
 
 use crate::ClipboardError;

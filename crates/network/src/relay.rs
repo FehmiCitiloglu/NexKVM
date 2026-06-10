@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 /// Relay deployment kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

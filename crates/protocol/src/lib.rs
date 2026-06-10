@@ -1,4 +1,4 @@
-//! coklu wire protocol.
+//! nexkvm wire protocol.
 //!
 //! This crate is the dependency-light foundation of the platform: every other
 //! crate that crosses the network boundary speaks the types defined here. It

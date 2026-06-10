@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 use serde::{Deserialize, Serialize};
 
 use crate::AudioError;

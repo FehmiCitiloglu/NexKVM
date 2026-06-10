@@ -16,7 +16,7 @@
 //! The resolver is sans-IO and fully deterministic, which makes the conflict
 //! semantics unit-testable in isolation.
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 use crate::content::ContentFingerprint;
 

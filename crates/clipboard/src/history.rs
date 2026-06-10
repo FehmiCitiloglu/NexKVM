@@ -16,7 +16,7 @@
 
 use std::collections::VecDeque;
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 use crate::content::{ClipboardSnapshot, ContentFingerprint};
 

@@ -9,8 +9,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use coklu_core::identity::{DeviceInfo, OsKind};
-use coklu_discovery::{
+use nexkvm_core::identity::{DeviceInfo, OsKind};
+use nexkvm_discovery::{
     DiscoveryService, FingerprintAllowlist, ServiceAnnouncement, ServiceConfig, UdpConfig,
     UdpDiscovery,
 };

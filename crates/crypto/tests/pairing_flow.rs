@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use coklu_crypto::{
+use nexkvm_crypto::{
     DEFAULT_PAIRING_TTL, DeviceIdentity, InMemoryTrustStore, PairingBootstrap, PairingSession,
     PairingState, PublicKey, TrustStore,
 };

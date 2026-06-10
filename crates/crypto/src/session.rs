@@ -13,8 +13,8 @@ use crate::error::CryptoError;
 const SESSION_KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const NONCE_PREFIX_LEN: usize = NONCE_LEN - std::mem::size_of::<u64>();
-const HKDF_SALT: &[u8] = b"coklu session security v1";
-const AEAD_AAD_PREFIX: &[u8] = b"coklu-session-message-v1";
+const HKDF_SALT: &[u8] = b"nexkvm session security v1";
+const AEAD_AAD_PREFIX: &[u8] = b"nexkvm-session-message-v1";
 
 /// Symmetric keys derived for a single authenticated session.
 ///

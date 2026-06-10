@@ -2,9 +2,9 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use coklu_input::{CursorSample, InputBatchPolicy, InputBatcher, InputEvent, PredictiveCursor};
-use coklu_network::{NetworkQualityEstimator, NetworkQualitySample, ZeroCopyPacket};
-use coklu_protocol::{Envelope, MessageId, MessageKind, PROTOCOL_VERSION};
+use nexkvm_input::{CursorSample, InputBatchPolicy, InputBatcher, InputEvent, PredictiveCursor};
+use nexkvm_network::{NetworkQualityEstimator, NetworkQualitySample, ZeroCopyPacket};
+use nexkvm_protocol::{Envelope, MessageId, MessageKind, PROTOCOL_VERSION};
 
 const ITERS: usize = 100_000;
 

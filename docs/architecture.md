@@ -1,6 +1,6 @@
 # Architecture
 
-coklu is organized as a Rust workspace with small crates that own specific parts of the continuity platform. The current implementation favors Sans-IO state machines and trait boundaries so behavior can be tested before native integrations are added.
+nexkvm is organized as a Rust workspace with small crates that own specific parts of the continuity platform. The current implementation favors Sans-IO state machines and trait boundaries so behavior can be tested before native integrations are added.
 
 ## Crate Ownership
 

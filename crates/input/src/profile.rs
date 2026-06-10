@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 use serde::{Deserialize, Serialize};
 
 use crate::acceleration::SmartCursorAcceleration;

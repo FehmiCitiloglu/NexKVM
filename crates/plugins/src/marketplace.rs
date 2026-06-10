@@ -123,7 +123,7 @@ mod tests {
     fn listing() -> MarketplaceListing {
         MarketplaceListing {
             manifest: PluginManifest {
-                id: "dev.coklu.test".into(),
+                id: "dev.nexkvm.test".into(),
                 name: "Test".into(),
                 version: "1.0.0".into(),
                 description: String::new(),
@@ -131,7 +131,7 @@ mod tests {
                 entrypoint: "plugin.wasm".into(),
                 required_capabilities: PluginCapabilities::none(),
             },
-            publisher: "coklu".into(),
+            publisher: "nexkvm".into(),
             trust: MarketplaceTrust::VerifiedPublisher,
             artifacts: vec![PluginArtifact {
                 runtime: PluginRuntimeKind::Wasm,
@@ -155,7 +155,7 @@ mod tests {
     fn catalog_upserts_and_filters() {
         let mut catalog = MarketplaceCatalog::new();
         catalog.upsert(listing());
-        assert!(catalog.get("dev.coklu.test").is_some());
+        assert!(catalog.get("dev.nexkvm.test").is_some());
         assert_eq!(catalog.installable().len(), 1);
     }
 }

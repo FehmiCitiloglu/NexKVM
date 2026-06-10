@@ -296,7 +296,7 @@ fn confirmation_code(a: &PublicKey, b: &PublicKey, nonce: &[u8; NONCE_LEN]) -> C
     };
 
     let mut hasher = Sha256::new();
-    hasher.update(b"coklu-pair-sas-v1");
+    hasher.update(b"nexkvm-pair-sas-v1");
     absorb_field(&mut hasher, lo.as_bytes());
     absorb_field(&mut hasher, hi.as_bytes());
     hasher.update(nonce);

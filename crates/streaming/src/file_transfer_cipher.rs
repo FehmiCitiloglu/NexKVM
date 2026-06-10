@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use coklu_crypto::SessionSecurity;
+use nexkvm_crypto::SessionSecurity;
 
 use crate::TransferError;
 
@@ -109,7 +109,7 @@ impl TransferCipher for SessionTransferCipher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_crypto::CryptoError;
+    use nexkvm_crypto::CryptoError;
     use std::collections::HashSet;
     use std::sync::Mutex;
 

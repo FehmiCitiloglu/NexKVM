@@ -1,6 +1,6 @@
 //! Telemetry: structured logging & tracing.
 //!
-//! coklu standardizes on the [`tracing`] ecosystem so spans flow across async
+//! nexkvm standardizes on the [`tracing`] ecosystem so spans flow across async
 //! tasks (connection handling, input pipelines) with correlatable context.
 //! [`init`] wires up a subscriber once at process start; library crates emit
 //! events with the `tracing` macros and never configure a subscriber
@@ -9,7 +9,7 @@
 //! # Privacy
 //! Telemetry is **local-only by default** — logs go to stderr/files, never the
 //! network. Crypto material is excluded from logs by construction (see the
-//! redacted `Debug` impls in `coklu-crypto`).
+//! redacted `Debug` impls in `nexkvm-crypto`).
 
 use std::str::FromStr;
 
@@ -29,7 +29,7 @@ pub enum TelemetryError {
     InvalidFilter(String),
 }
 
-/// Verbosity floor when no `RUST_LOG`/`COKLU_LOG` override is present.
+/// Verbosity floor when no `RUST_LOG`/`NEXKVM_LOG` override is present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
@@ -80,7 +80,7 @@ impl Default for TelemetryConfig {
 
 /// Initialize the global tracing subscriber.
 ///
-/// Filter precedence: `COKLU_LOG` env var, then `RUST_LOG`, then the configured
+/// Filter precedence: `NEXKVM_LOG` env var, then `RUST_LOG`, then the configured
 /// [`LogLevel`]. With the `json` feature the output is structured JSON;
 /// otherwise it is human-readable.
 ///
@@ -106,7 +106,7 @@ pub fn init(config: &TelemetryConfig) -> Result<(), TelemetryError> {
 }
 
 fn build_filter(config: &TelemetryConfig) -> Result<EnvFilter, TelemetryError> {
-    if let Ok(directive) = std::env::var("COKLU_LOG").or_else(|_| std::env::var("RUST_LOG")) {
+    if let Ok(directive) = std::env::var("NEXKVM_LOG").or_else(|_| std::env::var("RUST_LOG")) {
         return EnvFilter::from_str(&directive)
             .map_err(|e| TelemetryError::InvalidFilter(e.to_string()));
     }

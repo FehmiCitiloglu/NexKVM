@@ -3,9 +3,9 @@
 //! connectivity, and a security downgrade is refused — all through the public
 //! API.
 
-use coklu_core::identity::DeviceId;
-use coklu_network::internet::{CandidateKind, InternetCandidate, RelayConfig, WebRtcConfig};
-use coklu_network::{
+use nexkvm_core::identity::DeviceId;
+use nexkvm_network::internet::{CandidateKind, InternetCandidate, RelayConfig, WebRtcConfig};
+use nexkvm_network::{
     ConnectivityPlan, InternetConnectivityPlanner, NatType, RemoteSessionAnswer,
     RemoteSessionEstablisher, RemoteSessionId, RemoteSessionPolicy, answer_offer,
 };
@@ -45,7 +45,7 @@ fn trusted_devices_link_over_simulated_signaling() {
 
     // Offer crosses the signaling channel as JSON.
     let offer_wire = serde_json::to_vec(establisher.pending_offer()).unwrap();
-    let offer_received: coklu_network::RemoteSessionOffer =
+    let offer_received: nexkvm_network::RemoteSessionOffer =
         serde_json::from_slice(&offer_wire).unwrap();
 
     // B validates against its own policy (A is trusted) and answers.

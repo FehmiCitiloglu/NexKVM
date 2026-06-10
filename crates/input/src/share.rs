@@ -24,7 +24,7 @@
 //! existing [`MonitorLayout::denormalize`] + [`CursorInterpolator`](crate::CursorInterpolator)
 //! to place and smooth the incoming cursor, so no new receiver logic is needed.
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 use crate::InputEvent;
 use crate::boundary::{BoundaryDetector, Edge, Transition};

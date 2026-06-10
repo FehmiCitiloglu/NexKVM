@@ -3,24 +3,24 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/target/package"
-APP_DIR="$DIST/coklu.app"
-VERSION="${COKLU_VERSION:-0.1.0}"
-ARCHIVE="$DIST/coklu-macos-universal-${VERSION}.zip"
-LOGO_PNG="$ROOT/packaging/assets/coklu-logo.png"
-ICONSET_DIR="$DIST/coklu.iconset"
-ICNS_OUT="$APP_DIR/Contents/Resources/coklu.icns"
+APP_DIR="$DIST/nexkvm.app"
+VERSION="${NEXKVM_VERSION:-0.1.0}"
+ARCHIVE="$DIST/nexkvm-macos-universal-${VERSION}.zip"
+LOGO_PNG="$ROOT/packaging/assets/nexkvm-logo.png"
+ICONSET_DIR="$DIST/nexkvm.iconset"
+ICNS_OUT="$APP_DIR/Contents/Resources/nexkvm.icns"
 
 mkdir -p "$DIST"
 
 echo "Building release binary..."
-cargo build -p coklu --release
+cargo build -p nexkvm --release
 
 echo "Creating app bundle..."
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$ROOT/packaging/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
-cp "$ROOT/target/release/coklu" "$APP_DIR/Contents/MacOS/coklu"
-chmod +x "$APP_DIR/Contents/MacOS/coklu"
+cp "$ROOT/target/release/nexkvm" "$APP_DIR/Contents/MacOS/nexkvm"
+chmod +x "$APP_DIR/Contents/MacOS/nexkvm"
 
 if [[ ! -f "$LOGO_PNG" ]]; then
   echo "Logo not found at $LOGO_PNG"

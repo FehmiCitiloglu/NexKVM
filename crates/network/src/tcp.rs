@@ -1,13 +1,13 @@
 //! Working TCP transport (the universal fallback).
 //!
 //! Implements [`Transport`]/[`Connection`] over `tokio::net::TCP`, framing
-//! [`Envelope`]s with [`coklu_protocol::FrameCodec`] + [`crate::wire`]. Nagle is
+//! [`Envelope`]s with [`nexkvm_protocol::FrameCodec`] + [`crate::wire`]. Nagle is
 //! disabled (`TCP_NODELAY`) so small input messages are not delayed by the
 //! kernel — latency batching is owned explicitly by [`crate::buffer`] instead.
 //!
 //! # Security note
 //! This layer moves bytes; it does **not** itself add TLS. Confidentiality and
-//! integrity are provided by the [`coklu_crypto`](coklu_crypto) session layer,
+//! integrity are provided by the [`nexkvm_crypto`](nexkvm_crypto) session layer,
 //! which seals the [`Envelope`] body before it reaches the transport. A TLS
 //! wrapper (rustls) for the TCP path is a follow-up in the security phase; the
 //! QUIC path already carries TLS 1.3 natively.
@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use coklu_protocol::{Envelope, FrameCodec};
+use nexkvm_protocol::{Envelope, FrameCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -161,7 +161,7 @@ impl Transport for TcpTransport {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use coklu_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
+    use nexkvm_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
 
     fn loopback() -> SocketAddr {
         // Port 0 → OS picks a free port.

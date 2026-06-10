@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 /// Trust level assigned to a mesh node by the local trust/policy layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

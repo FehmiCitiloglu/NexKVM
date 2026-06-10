@@ -1,6 +1,6 @@
 # Release Readiness
 
-This document defines the production gates for coklu release candidates. It is
+This document defines the production gates for nexkvm release candidates. It is
 intentionally stricter than the current foundation-phase implementation: a
 release candidate must satisfy these gates before it can be called production
 ready.

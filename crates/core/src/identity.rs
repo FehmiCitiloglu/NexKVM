@@ -1,6 +1,6 @@
-//! Device identity within a coklu mesh.
+//! Device identity within a nexkvm mesh.
 //!
-//! Distinct from cryptographic identity ([`coklu_crypto::DeviceIdentity`]): a
+//! Distinct from cryptographic identity ([`nexkvm_crypto::DeviceIdentity`]): a
 //! [`DeviceId`] is a stable, opaque handle used for routing and UI, while the
 //! crypto key proves *authenticity*. The two are bound together at pairing.
 

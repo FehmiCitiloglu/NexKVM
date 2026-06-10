@@ -24,8 +24,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MPL-2.0"
-repository = "https://github.com/coklu/coklu"
-authors = ["coklu contributors"]
+repository = "https://github.com/FehmiCitiloglu/NexKVM"
+authors = ["NexKVM contributors"]
 
 [workspace.lints.rust]
 unsafe_code = "warn"
@@ -70,20 +70,20 @@ mdns-sd = "0.11"
 flate2 = "1"
 
 # Internal crates
-coklu-protocol = { path = "crates/protocol" }
-coklu-core = { path = "crates/core" }
-coklu-crypto = { path = "crates/crypto" }
-coklu-network = { path = "crates/network" }
-coklu-discovery = { path = "crates/discovery" }
-coklu-input = { path = "crates/input" }
-coklu-clipboard = { path = "crates/clipboard" }
-coklu-streaming = { path = "crates/streaming" }
-coklu-plugins = { path = "crates/plugins" }
-coklu-storage = { path = "crates/storage" }
-coklu-telemetry = { path = "crates/telemetry" }
-coklu-platform-windows = { path = "crates/platform/platform-windows" }
-coklu-platform-linux = { path = "crates/platform/platform-linux" }
-coklu-platform-macos = { path = "crates/platform/platform-macos" }
+nexkvm-protocol = { path = "crates/protocol" }
+nexkvm-core = { path = "crates/core" }
+nexkvm-crypto = { path = "crates/crypto" }
+nexkvm-network = { path = "crates/network" }
+nexkvm-discovery = { path = "crates/discovery" }
+nexkvm-input = { path = "crates/input" }
+nexkvm-clipboard = { path = "crates/clipboard" }
+nexkvm-streaming = { path = "crates/streaming" }
+nexkvm-plugins = { path = "crates/plugins" }
+nexkvm-storage = { path = "crates/storage" }
+nexkvm-telemetry = { path = "crates/telemetry" }
+nexkvm-platform-windows = { path = "crates/platform/platform-windows" }
+nexkvm-platform-linux = { path = "crates/platform/platform-linux" }
+nexkvm-platform-macos = { path = "crates/platform/platform-macos" }
 
 [profile.release]
 lto = "thin"

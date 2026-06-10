@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 use crate::content::{ClipboardSnapshot, ContentFingerprint};
 use crate::history::{ClipboardHistory, HistoryConfig, SkipReason};

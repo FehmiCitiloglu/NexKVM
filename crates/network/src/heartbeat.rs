@@ -1,6 +1,6 @@
 //! Heartbeat & liveness.
 //!
-//! A periodic [`MessageKind::Heartbeat`](coklu_protocol::MessageKind::Heartbeat)
+//! A periodic [`MessageKind::Heartbeat`](nexkvm_protocol::MessageKind::Heartbeat)
 //! exchange keeps idle links warm (so cursor handoff is instant) and detects
 //! dead peers. Each ping carries a monotonic send timestamp that the peer echoes
 //! in a pong, yielding an RTT sample for [`RttTracker`](crate::latency::RttTracker).
@@ -14,7 +14,7 @@
 use std::time::{Duration, Instant};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use coklu_protocol::ProtocolError;
+use nexkvm_protocol::ProtocolError;
 
 /// Heartbeat payload: a ping or a pong carrying a nanosecond timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 [package]
-name = "coklu-protocol"
-description = "coklu wire protocol: framing, message envelope, and version negotiation."
+name = "nexkvm-protocol"
+description = "nexkvm wire protocol: framing, message envelope, and version negotiation."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

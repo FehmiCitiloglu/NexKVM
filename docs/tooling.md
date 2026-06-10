@@ -7,7 +7,7 @@ This repository keeps developer tooling lightweight and Cargo-native.
 Cross-crate integration tests live under member crates. The current protocol/network/input/streaming pipeline test is:
 
 ```sh
-cargo test -p coklu-network --test protocol_pipeline
+cargo test -p nexkvm-network --test protocol_pipeline
 ```
 
 ## Protocol Fuzzing
@@ -26,7 +26,7 @@ The target feeds arbitrary bytes through stream framing and envelope decoding. I
 The latency benchmark suite is a harness-free Cargo bench target:
 
 ```sh
-cargo bench -p coklu-network --bench latency_suite
+cargo bench -p nexkvm-network --bench latency_suite
 ```
 
 or:
@@ -40,13 +40,13 @@ sh scripts/bench.sh
 The desktop binary includes dependency-light developer commands:
 
 ```sh
-cargo run -p coklu -- doctor
-cargo run -p coklu -- protocol
-cargo run -p coklu -- config-path
-cargo run -p coklu -- simulate tools/sim/local-workspace.toml
+cargo run -p nexkvm -- doctor
+cargo run -p nexkvm -- protocol
+cargo run -p nexkvm -- config-path
+cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 ```
 
-Running `cargo run -p coklu` with no subcommand starts the daemon.
+Running `cargo run -p nexkvm` with no subcommand starts the daemon.
 
 ## Local Simulation
 

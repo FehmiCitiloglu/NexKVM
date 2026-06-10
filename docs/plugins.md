@@ -1,6 +1,6 @@
 # Plugins
 
-The plugin system lets coklu grow through automation, custom sync handlers, AI clipboard actions, and device-specific workflows without coupling extensions directly to core subsystems.
+The plugin system lets nexkvm grow through automation, custom sync handlers, AI clipboard actions, and device-specific workflows without coupling extensions directly to core subsystems.
 
 ## Architecture
 

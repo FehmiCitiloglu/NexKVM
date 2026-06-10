@@ -1,6 +1,6 @@
 [package]
-name = "coklu-input"
-description = "Input event model and capture/injection traits for coklu."
+name = "nexkvm-input"
+description = "Input event model and capture/injection traits for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-coklu-core.workspace = true
+nexkvm-core.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 thiserror.workspace = true

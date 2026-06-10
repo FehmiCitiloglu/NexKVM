@@ -156,213 +156,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coklu"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "coklu-clipboard",
- "coklu-core",
- "coklu-crypto",
- "coklu-discovery",
- "coklu-input",
- "coklu-network",
- "coklu-platform-linux",
- "coklu-platform-macos",
- "coklu-platform-windows",
- "coklu-plugins",
- "coklu-protocol",
- "coklu-storage",
- "coklu-streaming",
- "coklu-telemetry",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "coklu-clipboard"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "coklu-core",
- "coklu-crypto",
- "flate2",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "coklu-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "coklu-crypto",
- "coklu-protocol",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "coklu-crypto"
-version = "0.1.0"
-dependencies = [
- "chacha20poly1305",
- "hkdf",
- "serde",
- "sha2",
- "thiserror 1.0.69",
- "zeroize",
-]
-
-[[package]]
-name = "coklu-discovery"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "coklu-core",
- "coklu-crypto",
- "mdns-sd",
- "serde",
- "serde_json",
- "socket2 0.5.10",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "coklu-input"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "coklu-core",
- "serde",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "coklu-mobile-future"
-version = "0.1.0"
-dependencies = [
- "coklu-core",
-]
-
-[[package]]
-name = "coklu-network"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "coklu-core",
- "coklu-crypto",
- "coklu-input",
- "coklu-protocol",
- "coklu-streaming",
- "quinn",
- "rcgen",
- "rustls",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "coklu-platform-linux"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "coklu-core",
- "coklu-input",
-]
-
-[[package]]
-name = "coklu-platform-macos"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "coklu-core",
- "coklu-input",
-]
-
-[[package]]
-name = "coklu-platform-windows"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "coklu-core",
- "coklu-input",
-]
-
-[[package]]
-name = "coklu-plugins"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "coklu-core",
- "coklu-protocol",
- "serde",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "coklu-protocol"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "coklu-storage"
-version = "0.1.0"
-dependencies = [
- "coklu-core",
- "coklu-crypto",
- "coklu-telemetry",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
-]
-
-[[package]]
-name = "coklu-streaming"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "coklu-core",
- "coklu-crypto",
- "flate2",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "coklu-telemetry"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 1.0.69",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -835,6 +628,213 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nexkvm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nexkvm-clipboard",
+ "nexkvm-core",
+ "nexkvm-crypto",
+ "nexkvm-discovery",
+ "nexkvm-input",
+ "nexkvm-network",
+ "nexkvm-platform-linux",
+ "nexkvm-platform-macos",
+ "nexkvm-platform-windows",
+ "nexkvm-plugins",
+ "nexkvm-protocol",
+ "nexkvm-storage",
+ "nexkvm-streaming",
+ "nexkvm-telemetry",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nexkvm-clipboard"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "flate2",
+ "nexkvm-core",
+ "nexkvm-crypto",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "nexkvm-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "nexkvm-crypto",
+ "nexkvm-protocol",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "nexkvm-crypto"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "hkdf",
+ "serde",
+ "sha2",
+ "thiserror 1.0.69",
+ "zeroize",
+]
+
+[[package]]
+name = "nexkvm-discovery"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mdns-sd",
+ "nexkvm-core",
+ "nexkvm-crypto",
+ "serde",
+ "serde_json",
+ "socket2 0.5.10",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nexkvm-input"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nexkvm-core",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "nexkvm-mobile-future"
+version = "0.1.0"
+dependencies = [
+ "nexkvm-core",
+]
+
+[[package]]
+name = "nexkvm-network"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "nexkvm-core",
+ "nexkvm-crypto",
+ "nexkvm-input",
+ "nexkvm-protocol",
+ "nexkvm-streaming",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "nexkvm-platform-linux"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nexkvm-core",
+ "nexkvm-input",
+]
+
+[[package]]
+name = "nexkvm-platform-macos"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nexkvm-core",
+ "nexkvm-input",
+]
+
+[[package]]
+name = "nexkvm-platform-windows"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nexkvm-core",
+ "nexkvm-input",
+]
+
+[[package]]
+name = "nexkvm-plugins"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "nexkvm-core",
+ "nexkvm-protocol",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "nexkvm-protocol"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nexkvm-storage"
+version = "0.1.0"
+dependencies = [
+ "nexkvm-core",
+ "nexkvm-crypto",
+ "nexkvm-telemetry",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
+name = "nexkvm-streaming"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "flate2",
+ "nexkvm-core",
+ "nexkvm-crypto",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "nexkvm-telemetry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

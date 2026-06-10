@@ -1,6 +1,6 @@
 //! Persistent trusted-device registry.
 //!
-//! Backs [`coklu_crypto::TrustStore`] with a JSON file so pairings survive
+//! Backs [`nexkvm_crypto::TrustStore`] with a JSON file so pairings survive
 //! restarts. Trust entries hold only *public* key material and metadata — never
 //! secrets — so a plain file (in the app's config dir) is appropriate; private
 //! keys live in the OS keychain, wired up separately.
@@ -8,7 +8,7 @@
 //! # Persistence model
 //! The in-memory map is the source of truth; every mutation best-effort writes
 //! the whole map back to disk (the set of paired devices is small). Because the
-//! [`coklu_crypto::TrustStore`] trait methods are infallible, write errors from
+//! [`nexkvm_crypto::TrustStore`] trait methods are infallible, write errors from
 //! [`TrustStore::insert`]/[`remove`](TrustStore::remove) cannot be surfaced
 //! there; call [`FileTrustStore::flush`] when you need to confirm a write
 //! reached disk.
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use coklu_crypto::{PublicKey, TrustEntry, TrustStore};
+use nexkvm_crypto::{PublicKey, TrustEntry, TrustStore};
 use thiserror::Error;
 
 /// Errors loading or persisting the trust registry.

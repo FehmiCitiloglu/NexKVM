@@ -1,4 +1,4 @@
-//! coklu core domain.
+//! nexkvm core domain.
 //!
 //! `core` is the hub that the feature crates (input, clipboard, discovery, …)
 //! and the platform backends depend on. It owns foundational concerns:

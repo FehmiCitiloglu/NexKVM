@@ -5,7 +5,7 @@
 //! explicit short-lived invite. This module models the ticket/policy layer only;
 //! no HTTP server, WebRTC agent, or JavaScript runtime lives here.
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 /// Policy for browser remote sessions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

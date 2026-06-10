@@ -1,6 +1,6 @@
 [package]
-name = "coklu-streaming"
-description = "Reliable/ordered media and bulk transfer streaming model for coklu."
+name = "nexkvm-streaming"
+description = "Reliable/ordered media and bulk transfer streaming model for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -23,8 +23,8 @@ screen-vaapi = []
 screen-videotoolbox = []
 
 [dependencies]
-coklu-core.workspace = true
-coklu-crypto.workspace = true
+nexkvm-core.workspace = true
+nexkvm-crypto.workspace = true
 bytes.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true

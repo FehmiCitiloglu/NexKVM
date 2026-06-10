@@ -1,24 +1,24 @@
 //! Configuration & persistent storage.
 //!
 //! # Decision: TOML config
-//! coklu uses **TOML** for its user-facing config: it is human-friendly,
+//! nexkvm uses **TOML** for its user-facing config: it is human-friendly,
 //! comment-friendly, and round-trips cleanly with `serde`. The schema is a flat
 //! set of sections ([`Config`]) that mirror the crate boundaries, so each
 //! subsystem owns its own settings block.
 //!
 //! The default config location follows the platform convention (resolved by the
 //! desktop app, not hard-coded here so the type stays testable):
-//! - Linux: `$XDG_CONFIG_HOME/coklu/config.toml`
-//! - macOS: `~/Library/Application Support/coklu/config.toml`
-//! - Windows: `%APPDATA%\coklu\config.toml`
+//! - Linux: `$XDG_CONFIG_HOME/nexkvm/config.toml`
+//! - macOS: `~/Library/Application Support/nexkvm/config.toml`
+//! - Windows: `%APPDATA%\nexkvm\config.toml`
 //!
 //! Secrets (private keys, paired-device material) are **not** stored in this
 //! TOML file — they belong in the OS keychain, wired up in a later phase.
 
 use std::path::Path;
 
-use coklu_core::identity::OsKind;
-use coklu_telemetry::TelemetryConfig;
+use nexkvm_core::identity::OsKind;
+use nexkvm_telemetry::TelemetryConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -225,10 +225,10 @@ fn default_device_name() -> String {
         .ok()
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| match std::env::consts::OS {
-            "macos" => "coklu (macOS)".into(),
-            "windows" => "coklu (Windows)".into(),
-            "linux" => "coklu (Linux)".into(),
-            _ => "coklu device".into(),
+            "macos" => "nexkvm (macOS)".into(),
+            "windows" => "nexkvm (Windows)".into(),
+            "linux" => "nexkvm (Linux)".into(),
+            _ => "nexkvm device".into(),
         })
 }
 
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn missing_file_yields_defaults() {
-        let cfg = Config::load("/nonexistent/coklu/config.toml").unwrap();
+        let cfg = Config::load("/nonexistent/nexkvm/config.toml").unwrap();
         assert!(cfg.security.require_pairing);
     }
 

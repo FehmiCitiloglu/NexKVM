@@ -4,7 +4,7 @@
 //! the tablet should "throw" the dragged file across the desktop and land it on
 //! the tablet, while a flick into empty space resolves to no target.
 
-use coklu_core::{
+use nexkvm_core::{
     DeviceId, FlickPlanner, FlickVector, ThrowPayload, UnifiedVirtualDesktop, WorkspaceDevice,
     WorkspacePoint, WorkspaceRect,
 };

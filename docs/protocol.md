@@ -1,6 +1,6 @@
 # Protocol
 
-The protocol crate defines the wire-level contract shared by every coklu transport and feature crate. It intentionally stays dependency-light and runtime-free.
+The protocol crate defines the wire-level contract shared by every nexkvm transport and feature crate. It intentionally stays dependency-light and runtime-free.
 
 ## Versioning
 

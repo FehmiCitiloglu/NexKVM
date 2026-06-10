@@ -5,16 +5,16 @@
 //! WebRTC path, or at-rest persistence. This crate deliberately does **not**
 //! implement any cryptographic primitive: it defines the [`ClipboardCipher`]
 //! boundary and the production implementation is an adapter over a
-//! [`coklu_crypto::SessionSecurity`] session, injected by the orchestration
+//! [`nexkvm_crypto::SessionSecurity`] session, injected by the orchestration
 //! layer. Keeping crypto in one audited crate is a security requirement.
 //!
-//! [`coklu_crypto::SessionSecurity`]: https://docs.rs/coklu-crypto
+//! [`nexkvm_crypto::SessionSecurity`]: https://docs.rs/nexkvm-crypto
 
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use coklu_crypto::SessionSecurity;
+use nexkvm_crypto::SessionSecurity;
 
 use crate::ClipboardError;
 
@@ -128,7 +128,7 @@ impl ClipboardCipher for SessionClipboardCipher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_crypto::CryptoError;
+    use nexkvm_crypto::CryptoError;
     use std::collections::HashSet;
     use std::sync::Mutex;
 

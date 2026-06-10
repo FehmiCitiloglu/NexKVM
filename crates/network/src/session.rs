@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use coklu_core::DeviceId;
-use coklu_protocol::{MessageId, ProtocolVersion};
+use nexkvm_core::DeviceId;
+use nexkvm_protocol::{MessageId, ProtocolVersion};
 
 /// Opaque token identifying a resumable session with a peer.
 ///
@@ -64,7 +64,7 @@ impl Session {
     /// `resume_from` (the highest id known to have been used).
     ///
     /// Keeping ids monotonic across reconnects preserves the replay-protection
-    /// invariant in [`coklu_crypto`]: the peer never sees an id
+    /// invariant in [`nexkvm_crypto`]: the peer never sees an id
     /// rewind.
     #[must_use]
     pub fn resume(
@@ -125,7 +125,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_protocol::PROTOCOL_VERSION;
+    use nexkvm_protocol::PROTOCOL_VERSION;
 
     fn peer() -> DeviceId {
         DeviceId::generate()

@@ -1,5 +1,5 @@
 [package]
-name = "coklu-core"
+name = "nexkvm-core"
 description = "Core domain: device identity, the event bus, and cross-platform backend traits."
 version.workspace = true
 edition.workspace = true
@@ -12,8 +12,8 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-coklu-protocol.workspace = true
-coklu-crypto.workspace = true
+nexkvm-protocol.workspace = true
+nexkvm-crypto.workspace = true
 serde.workspace = true
 bytes.workspace = true
 thiserror.workspace = true

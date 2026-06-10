@@ -10,7 +10,7 @@ control, datagram support, active maintenance.
 
 ---
 
-## Why QUIC for coklu
+## Why QUIC for nexkvm
 
 - **Stream multiplexing without head-of-line blocking** — separate logical lanes
   (input, clipboard, file, audio) on independent QUIC streams; a stalled file
@@ -18,7 +18,7 @@ control, datagram support, active maintenance.
 - **Unreliable datagrams** for real-time input — `send_datagram` skips
   retransmission/ordering: freshest pointer event wins, matching the lossy
   semantics of our event bus.
-- **TLS 1.3 built in** — encryption + the outer auth channel for free; coklu
+- **TLS 1.3 built in** — encryption + the outer auth channel for free; nexkvm
   binds it to device identity at the `crypto` layer (cert = device key).
 - **Connection migration** — survives the device roaming between Wi-Fi/Ethernet
   without a full reconnect (laptop moving networks).

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping build coklu. The project is still in a foundation phase, so high-quality models, boundaries, tests, and documentation matter as much as native integrations.
+Thanks for helping build NexKVM. The project is still in a foundation phase, so high-quality models, boundaries, tests, and documentation matter as much as native integrations.
 
 ## Local Setup
 
@@ -15,9 +15,9 @@ cargo fmt --all -- --check
 Useful developer commands:
 
 ```sh
-cargo run -p coklu -- doctor
-cargo run -p coklu -- protocol
-cargo run -p coklu -- simulate tools/sim/local-workspace.toml
+cargo run -p nexkvm -- doctor
+cargo run -p nexkvm -- protocol
+cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 ```
 
 ## Development Principles
@@ -56,9 +56,9 @@ Use focused tests at the crate that owns the behavior:
 Current integration/fuzz/bench entrypoints:
 
 ```sh
-cargo test -p coklu-network --test protocol_pipeline
+cargo test -p nexkvm-network --test protocol_pipeline
 cargo check --manifest-path fuzz/Cargo.toml --bins
-cargo bench -p coklu-network --bench latency_suite
+cargo bench -p nexkvm-network --bench latency_suite
 ```
 
 ## Documentation
@@ -93,7 +93,7 @@ For protocol/security/network changes, also consider:
 
 ```sh
 cargo check --manifest-path fuzz/Cargo.toml --bins
-cargo bench -p coklu-network --bench latency_suite
+cargo bench -p nexkvm-network --bench latency_suite
 ```
 
 ## Platform Integration Notes

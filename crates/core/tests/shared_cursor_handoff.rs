@@ -2,7 +2,7 @@
 //! cursor, the host grants it (clearing the pending queue), the lease expires,
 //! and a fresh request can be denied — all through the public API.
 
-use coklu_core::{
+use nexkvm_core::{
     CollaborationMode, CollaborationParticipant, CollaborationSession, DeviceId, ParticipantRole,
 };
 

@@ -1,6 +1,6 @@
 //! Shared workspace control-plane model.
 //!
-//! This module owns the platform-neutral shape for coklu's shared workspace:
+//! This module owns the platform-neutral shape for nexkvm's shared workspace:
 //! unified virtual desktops, cross-device window snapping, app launching,
 //! global search, shared workspace memory, and spatial navigation. It performs
 //! no OS calls. Window enumeration, app launch, and desktop search are provided

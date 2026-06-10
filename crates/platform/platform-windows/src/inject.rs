@@ -2,7 +2,7 @@
 //!
 //! The real backend builds `INPUT` structures and calls `SendInput` (Win32). It
 //! is gated by User Interface Privilege Isolation (UIPI): injection into windows
-//! owned by higher-integrity processes is silently dropped, which coklu surfaces
+//! owned by higher-integrity processes is silently dropped, which nexkvm surfaces
 //! via capabilities rather than failing blindly. That FFI lands in a later phase;
 //! this module is the pure, testable translation it consumes — turning a neutral
 //! command into the `INPUT` kind + `dwFlags` + payload, with no `unsafe` and no
@@ -14,7 +14,7 @@
 //! scancode and sets `KEYEVENTF_SCANCODE`; this module passes the keycode
 //! through and records the up/down flag so the table applies at one seam.
 
-use coklu_input::{InjectionCommand, MouseButton};
+use nexkvm_input::{InjectionCommand, MouseButton};
 
 /// `MOUSEEVENTF_*` flags.
 pub mod mouse_flag {

@@ -12,12 +12,12 @@
 //! ```
 //!
 //! Over a **stream** transport (TCP) the encoded envelope is additionally
-//! length-prefixed by [`coklu_protocol::FrameCodec`]. Over a **datagram**
+//! length-prefixed by [`nexkvm_protocol::FrameCodec`]. Over a **datagram**
 //! transport (QUIC datagrams) the framing is the datagram boundary itself, so
 //! the raw encoding here is used directly.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use coklu_protocol::{Envelope, MessageId, MessageKind, ProtocolError, ProtocolVersion};
+use nexkvm_protocol::{Envelope, MessageId, MessageKind, ProtocolError, ProtocolVersion};
 
 /// Size of the fixed envelope header in bytes.
 pub const HEADER_LEN: usize = 2 + 2 + 8 + 2;
@@ -65,7 +65,7 @@ pub fn decode_envelope(mut payload: Bytes) -> Result<Envelope, ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_protocol::PROTOCOL_VERSION;
+    use nexkvm_protocol::PROTOCOL_VERSION;
 
     fn sample() -> Envelope {
         Envelope::new(

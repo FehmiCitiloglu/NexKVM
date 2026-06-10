@@ -19,11 +19,11 @@ pub enum NetworkError {
 
     /// A protocol framing/encoding failure.
     #[error(transparent)]
-    Protocol(#[from] coklu_protocol::ProtocolError),
+    Protocol(#[from] nexkvm_protocol::ProtocolError),
 
     /// A security failure (auth, decrypt, replay) on the link.
     #[error(transparent)]
-    Crypto(#[from] coklu_crypto::CryptoError),
+    Crypto(#[from] nexkvm_crypto::CryptoError),
 
     /// An operation exceeded its deadline.
     #[error("network operation timed out")]

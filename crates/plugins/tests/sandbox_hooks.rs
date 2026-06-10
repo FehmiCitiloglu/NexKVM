@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use coklu_core::{DeviceId, Event};
-use coklu_plugins::{
+use nexkvm_core::{DeviceId, Event};
+use nexkvm_plugins::{
     HostBroker, HostCall, Plugin, PluginCapabilities, PluginContext, PluginError, PluginManifest,
     PluginRegistry, PluginRuntimeKind,
 };
-use coklu_protocol::MessageKind;
+use nexkvm_protocol::MessageKind;
 
 #[derive(Debug)]
 struct CountingPlugin {
@@ -24,7 +24,7 @@ impl CountingPlugin {
     fn new(required: PluginCapabilities) -> Self {
         Self {
             manifest: PluginManifest {
-                id: "dev.coklu.sandbox".into(),
+                id: "dev.nexkvm.sandbox".into(),
                 name: "Sandbox".into(),
                 version: "1.0.0".into(),
                 description: String::new(),
@@ -97,7 +97,7 @@ async fn clipboard_plugin_only_sees_clipboard_hooks() {
 #[test]
 fn host_broker_enforces_least_privilege() {
     let broker = HostBroker::new(
-        "dev.coklu.sandbox",
+        "dev.nexkvm.sandbox",
         PluginCapabilities {
             read_clipboard: true,
             network_external: true,

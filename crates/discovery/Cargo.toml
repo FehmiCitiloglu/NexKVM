@@ -1,6 +1,6 @@
 [package]
-name = "coklu-discovery"
-description = "LAN device discovery (mDNS) abstraction for coklu."
+name = "nexkvm-discovery"
+description = "LAN device discovery (mDNS) abstraction for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,8 +19,8 @@ udp-broadcast = []
 mdns = ["dep:mdns-sd"]
 
 [dependencies]
-coklu-core.workspace = true
-coklu-crypto.workspace = true
+nexkvm-core.workspace = true
+nexkvm-crypto.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 serde.workspace = true

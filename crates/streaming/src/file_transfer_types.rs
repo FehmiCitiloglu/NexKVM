@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use bytes::Bytes;
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 use uuid::Uuid;
 
 use crate::TransferError;

@@ -11,7 +11,7 @@
 //! integration (behind the `runtime-wasm` feature) wires its host imports to
 //! [`HostBroker::authorize`] without changing any policy here.
 
-use coklu_protocol::MessageKind;
+use nexkvm_protocol::MessageKind;
 
 use crate::capability::PluginCapabilities;
 use crate::error::PluginError;
@@ -192,17 +192,17 @@ mod tests {
 
     #[test]
     fn broker_authorizes_granted_call() {
-        let broker = HostBroker::new("dev.coklu.test", caps_with_clipboard());
+        let broker = HostBroker::new("dev.nexkvm.test", caps_with_clipboard());
         assert!(broker.authorize(HostCall::ReadClipboard).is_ok());
     }
 
     #[test]
     fn broker_denies_ungranted_call() {
-        let broker = HostBroker::new("dev.coklu.test", caps_with_clipboard());
+        let broker = HostBroker::new("dev.nexkvm.test", caps_with_clipboard());
         let err = broker.authorize(HostCall::WriteClipboard).unwrap_err();
         match err {
             PluginError::PermissionDenied { plugin, capability } => {
-                assert_eq!(plugin, "dev.coklu.test");
+                assert_eq!(plugin, "dev.nexkvm.test");
                 assert_eq!(capability, "write_clipboard");
             }
             other => panic!("expected PermissionDenied, got {other:?}"),

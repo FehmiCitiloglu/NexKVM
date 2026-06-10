@@ -17,7 +17,7 @@
 //! FFI layer maps HID → evdev `KEY_*` before writing; this module passes the
 //! keycode through as the evdev `code` so the table can be applied at one seam.
 
-use coklu_input::{InjectionCommand, MouseButton};
+use nexkvm_input::{InjectionCommand, MouseButton};
 
 /// evdev event types (`EV_*`).
 pub mod ev_type {

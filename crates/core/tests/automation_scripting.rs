@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use coklu_core::{
+use nexkvm_core::{
     AutomationAction, AutomationEngine, AutomationRule, AutomationTrigger, DeviceId, ScriptContext,
     ScriptEngine, ScriptError, ScriptLanguage, ScriptRef, ShortcutId,
 };
@@ -91,7 +91,7 @@ async fn unsupported_language_is_rejected() {
             &ScriptRef::new("macro.js", ScriptLanguage::JavaScript),
             ScriptContext {
                 rule_id: "x".into(),
-                trigger: AutomationTrigger::CommandInvoked(coklu_core::CommandId::new("noop")),
+                trigger: AutomationTrigger::CommandInvoked(nexkvm_core::CommandId::new("noop")),
             },
         )
         .await;

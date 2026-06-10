@@ -3,8 +3,8 @@
 //! target — the canonical keyboard-sharing failure mode — all through the
 //! public API.
 
-use coklu_core::identity::DeviceId;
-use coklu_input::{
+use nexkvm_core::identity::DeviceId;
+use nexkvm_input::{
     DeviceProfileStore, DeviceUxProfile, InputEvent, KeyboardLayout, KeyboardShareController,
 };
 

@@ -6,7 +6,7 @@
 //! traversal. These records are **not authentication**; the remote encrypted
 //! session handshake still proves device identity.
 
-use coklu_core::identity::{DeviceId, DeviceInfo};
+use nexkvm_core::identity::{DeviceId, DeviceInfo};
 use serde::{Deserialize, Serialize};
 
 /// Internet-discovery candidate kind.
@@ -86,7 +86,7 @@ impl InternetDiscoveryRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_core::identity::OsKind;
+    use nexkvm_core::identity::OsKind;
 
     #[test]
     fn candidates_are_sorted_by_priority() {

@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
-use coklu_input::{AdaptivePoller, InputBatchPolicy, InputBatcher, InputEvent, PollingPolicy};
-use coklu_network::{
+use nexkvm_input::{AdaptivePoller, InputBatchPolicy, InputBatcher, InputEvent, PollingPolicy};
+use nexkvm_network::{
     NetworkQualityEstimator, NetworkQualityGrade, NetworkQualitySample, ZeroCopyPacket,
 };
-use coklu_protocol::{Envelope, FrameCodec, MessageId, MessageKind, PROTOCOL_VERSION};
-use coklu_streaming::{TransferCompression, TransferCompressionPolicy};
+use nexkvm_protocol::{Envelope, FrameCodec, MessageId, MessageKind, PROTOCOL_VERSION};
+use nexkvm_streaming::{TransferCompression, TransferCompressionPolicy};
 
 #[test]
 fn framed_zero_copy_packet_round_trips_through_protocol_pipeline() {

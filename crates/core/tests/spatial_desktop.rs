@@ -3,7 +3,7 @@
 //! the control-plane flow a zoomable spatial-navigation UI drives, all through
 //! the public API.
 
-use coklu_core::{
+use nexkvm_core::{
     DeviceId, ScreenPoint, SpatialViewport, UnifiedVirtualDesktop, ViewportSize, WorkspaceDevice,
     WorkspacePoint, WorkspaceRect,
 };

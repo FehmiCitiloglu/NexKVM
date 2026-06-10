@@ -12,7 +12,7 @@
 //! - [`compress`]/[`decompress`] — per-update sync compression (feature
 //!   `compression`).
 //! - [`ClipboardCipher`] — the encryption boundary; production wires an adapter
-//!   over a `coklu-crypto` session. Plaintext never reaches the transport.
+//!   over a `nexkvm-crypto` session. Plaintext never reaches the transport.
 //! - [`ConflictResolver`] — last-writer-wins + echo suppression for concurrent
 //!   copies across devices.
 //! - [`ClipboardHistory`] — bounded, dedup'd, pinnable history.

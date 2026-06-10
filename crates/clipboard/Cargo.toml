@@ -1,6 +1,6 @@
 [package]
-name = "coklu-clipboard"
-description = "Clipboard synchronization model and access traits for coklu."
+name = "nexkvm-clipboard"
+description = "Clipboard synchronization model and access traits for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,8 +19,8 @@ default = ["compression"]
 compression = ["dep:flate2"]
 
 [dependencies]
-coklu-core.workspace = true
-coklu-crypto.workspace = true
+nexkvm-core.workspace = true
+nexkvm-crypto.workspace = true
 bytes.workspace = true
 async-trait.workspace = true
 serde.workspace = true

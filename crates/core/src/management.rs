@@ -1,6 +1,6 @@
 //! Cloud sync, enterprise policy, and team collaboration management.
 //!
-//! Long-term deployment modes need a control plane without turning coklu into a
+//! Long-term deployment modes need a control plane without turning nexkvm into a
 //! centralized service. This module keeps that layer policy-only: cloud sync is
 //! optional, enterprise policy is explicit and auditable, and team membership
 //! gates collaboration capabilities before platform/network backends execute

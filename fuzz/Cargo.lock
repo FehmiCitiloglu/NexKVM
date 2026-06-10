@@ -65,13 +65,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "coklu-core"
+name = "nexkvm-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
- "coklu-crypto",
- "coklu-protocol",
+ "nexkvm-crypto",
+ "nexkvm-protocol",
  "serde",
  "thiserror",
  "tokio",
@@ -79,7 +79,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "coklu-crypto"
+name = "nexkvm-crypto"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -87,21 +87,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "coklu-network"
+name = "nexkvm-network"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
- "coklu-core",
- "coklu-crypto",
- "coklu-protocol",
+ "nexkvm-core",
+ "nexkvm-crypto",
+ "nexkvm-protocol",
  "serde",
  "thiserror",
  "tokio",
 ]
 
 [[package]]
-name = "coklu-protocol"
+name = "nexkvm-protocol"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -110,12 +110,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "coklu-protocol-fuzz"
+name = "nexkvm-protocol-fuzz"
 version = "0.0.0"
 dependencies = [
  "bytes",
- "coklu-network",
- "coklu-protocol",
+ "nexkvm-network",
+ "nexkvm-protocol",
  "libfuzzer-sys",
 ]
 

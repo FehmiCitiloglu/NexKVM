@@ -1,4 +1,4 @@
-//! The in-process event bus — coklu's decoupling backbone.
+//! The in-process event bus — nexkvm's decoupling backbone.
 //!
 //! # Architecture
 //! Producers (platform input capture, network ingress, discovery) and
@@ -19,11 +19,11 @@
 //! crates, not here.
 //!
 //! Event *bodies* that originate from the wire stay opaque ([`bytes::Bytes`]),
-//! matching [`coklu_protocol::Envelope`]; domain crates decode their own kinds.
+//! matching [`nexkvm_protocol::Envelope`]; domain crates decode their own kinds.
 //! This keeps `core` free of dependencies on the feature crates.
 
 use bytes::Bytes;
-use coklu_protocol::MessageKind;
+use nexkvm_protocol::MessageKind;
 use tokio::sync::broadcast;
 
 use crate::automation::{CommandId, CrossDeviceNotification};

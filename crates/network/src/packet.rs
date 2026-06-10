@@ -6,7 +6,7 @@
 //! the protocol boundary.
 
 use bytes::{Bytes, BytesMut};
-use coklu_protocol::{Envelope, ProtocolError};
+use nexkvm_protocol::{Envelope, ProtocolError};
 
 use crate::wire::{decode_envelope, encode_envelope};
 
@@ -109,7 +109,7 @@ impl PacketBatch {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use coklu_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
+    use nexkvm_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
 
     #[test]
     fn packet_decodes_body_zero_copy() {

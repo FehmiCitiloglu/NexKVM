@@ -1,6 +1,6 @@
 //! Protocol versioning strategy.
 //!
-//! coklu uses **semantic, negotiated versioning** at connection setup:
+//! nexkvm uses **semantic, negotiated versioning** at connection setup:
 //!
 //! - `major` bumps on wire-breaking changes (frame layout, envelope fields,
 //!   removal of a [`MessageKind`](crate::MessageKind)). Peers with mismatched

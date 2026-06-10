@@ -15,7 +15,7 @@
 //! module performs no I/O and holds no keys; the actual DTLS/transport
 //! encryption and replay protection are enforced by the `crypto` session layer.
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

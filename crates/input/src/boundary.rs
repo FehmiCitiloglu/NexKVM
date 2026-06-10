@@ -12,7 +12,7 @@
 //! positions and acts on the returned transitions (releasing local capture,
 //! forwarding subsequent input to the peer).
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 
 use crate::monitor::DisplayRect;
 
@@ -124,7 +124,7 @@ impl BoundaryDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_core::identity::DeviceId;
+    use nexkvm_core::identity::DeviceId;
 
     fn detector(links: Vec<EdgeLink>) -> BoundaryDetector {
         BoundaryDetector::new(DisplayRect::new(0, 0, 1920, 1080), links)

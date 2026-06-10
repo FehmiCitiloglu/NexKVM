@@ -1,7 +1,7 @@
-//! Networking stack for coklu.
+//! Networking stack for nexkvm.
 //!
 //! # Decision: layered transport with graceful fallback
-//! coklu speaks one application protocol ([`coklu_protocol`]) over a pluggable
+//! nexkvm speaks one application protocol ([`nexkvm_protocol`]) over a pluggable
 //! transport. The [`TransportSelector`] tries transports in priority order and
 //! falls back on failure:
 //!
@@ -11,20 +11,20 @@
 //!    fast connection migration when a device roams between networks.
 //! 2. **TCP + TLS** (`transport-tcp`) — universal fallback when QUIC/UDP is
 //!    blocked by a firewall. Single ordered stream; framed via
-//!    [`coklu_protocol::FrameCodec`].
+//!    [`nexkvm_protocol::FrameCodec`].
 //! 3. **WebRTC** (`transport-webrtc`) — later phase: NAT traversal (ICE/STUN/
 //!    TURN) for remote-mode connections beyond the LAN.
 //!
 //! Each backend is feature-gated so builds only compile the stacks they use.
 //! All backends present the same [`Transport`]/[`Connection`] traits, so the
 //! rest of the platform is transport-agnostic. Security (auth, AEAD, replay
-//! protection) is layered via [`coklu_crypto`] on top of the transport's own
+//! protection) is layered via [`nexkvm_crypto`] on top of the transport's own
 //! TLS, binding the channel to device identity.
 //!
 //! # Networking-core building blocks
 //! Beyond the transport backends, this crate provides the transport-agnostic
 //! machinery a robust link needs:
-//! - [`wire`] — [`coklu_protocol::Envelope`] ⇄ bytes codec.
+//! - [`wire`] — [`nexkvm_protocol::Envelope`] ⇄ bytes codec.
 //! - [`session`] — resumable, reconnect-surviving session state.
 //! - [`heartbeat`] — keep-alive + liveness detection.
 //! - [`latency`] — EWMA RTT/jitter measurement.

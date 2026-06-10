@@ -3,7 +3,7 @@
 //! Real integration uses Win32: low-level hooks (`SetWindowsHookEx`) / Raw Input
 //! for capture, `SendInput` for injection, and the clipboard API. Note that
 //! User Interface Privilege Isolation (UIPI) can block injection into windows
-//! owned by higher-integrity (elevated) processes; coklu surfaces this via
+//! owned by higher-integrity (elevated) processes; nexkvm surfaces this via
 //! capabilities rather than failing silently.
 //!
 //! FFI lands in a later phase; this is the skeleton. Compiled only on Windows;
@@ -12,8 +12,8 @@
 #![cfg(target_os = "windows")]
 
 use async_trait::async_trait;
-use coklu_core::platform::{PlatformBackend, PlatformCapabilities};
-use coklu_core::{CoreError, OsKind};
+use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
+use nexkvm_core::{CoreError, OsKind};
 
 pub mod inject;
 

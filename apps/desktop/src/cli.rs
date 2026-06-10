@@ -1,4 +1,4 @@
-//! coklu developer CLI: argument parsing and pure output formatting.
+//! nexkvm developer CLI: argument parsing and pure output formatting.
 //!
 //! Kept dependency-free of the runtime (no I/O, no telemetry) so the parsing
 //! and formatting logic is unit-testable. [`main`](crate) owns the side effects
@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 
-use coklu_crypto::{PairingBootstrap, TrustEntry};
+use nexkvm_crypto::{PairingBootstrap, TrustEntry};
 
 /// A parsed CLI subcommand.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,9 +22,9 @@ pub enum Command {
     ConfigPath,
     /// List trusted (paired) devices.
     Devices,
-    /// Decode and display a `coklu://` pairing bootstrap for confirmation.
+    /// Decode and display a `nexkvm://` pairing bootstrap for confirmation.
     Pair {
-        /// The scanned/pasted `coklu://pair/v1/...` URI.
+        /// The scanned/pasted `nexkvm://pair/v1/...` URI.
         uri: String,
     },
     /// Validate a local simulation config.
@@ -79,12 +79,12 @@ where
         Some("pair") => {
             let uri = it
                 .next()
-                .ok_or_else(|| "pair requires a coklu:// pairing uri".to_string())?;
+                .ok_or_else(|| "pair requires a nexkvm:// pairing uri".to_string())?;
             Command::Pair { uri }
         }
         Some("simulate") => Command::Simulate { path: it.next() },
         Some("help" | "--help" | "-h") => Command::Help,
-        Some(other) => return Err(format!("unknown command `{other}`; run `coklu help`")),
+        Some(other) => return Err(format!("unknown command `{other}`; run `nexkvm help`")),
     };
 
     Ok(Invocation { command, debug })
@@ -94,21 +94,21 @@ where
 #[must_use]
 pub fn help_text() -> String {
     let mut out = String::new();
-    out.push_str("coklu developer CLI\n\n");
+    out.push_str("nexkvm developer CLI\n\n");
     out.push_str("USAGE:\n");
-    out.push_str("  coklu [--debug]            Run the desktop daemon\n");
-    out.push_str("  coklu devices             List trusted (paired) devices\n");
-    out.push_str("  coklu pair <uri>          Decode a coklu:// pairing bootstrap\n");
-    out.push_str("  coklu doctor              Print local platform/config diagnostics\n");
-    out.push_str("  coklu protocol            Print protocol compatibility info\n");
-    out.push_str("  coklu config-path         Print the resolved config path\n");
-    out.push_str("  coklu simulate [toml]     Validate a local simulation config\n");
+    out.push_str("  nexkvm [--debug]            Run the desktop daemon\n");
+    out.push_str("  nexkvm devices             List trusted (paired) devices\n");
+    out.push_str("  nexkvm pair <uri>          Decode a nexkvm:// pairing bootstrap\n");
+    out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
+    out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
+    out.push_str("  nexkvm config-path         Print the resolved config path\n");
+    out.push_str("  nexkvm simulate [toml]     Validate a local simulation config\n");
     out.push_str("\nFLAGS:\n");
     out.push_str("  --debug                   Raise log verbosity to debug\n");
     out
 }
 
-/// Render the trusted-device list for `coklu devices`.
+/// Render the trusted-device list for `nexkvm devices`.
 #[must_use]
 pub fn format_device_list(entries: &[TrustEntry]) -> String {
     if entries.is_empty() {
@@ -145,7 +145,7 @@ pub fn format_pairing(bootstrap: &PairingBootstrap) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_crypto::PublicKey;
+    use nexkvm_crypto::PublicKey;
 
     fn entry(name: &str, key: &[u8], paired_at: u64) -> TrustEntry {
         TrustEntry {
@@ -174,11 +174,11 @@ mod tests {
     #[test]
     fn pair_requires_a_uri() {
         assert!(parse(["pair"]).is_err());
-        let parsed = parse(["pair", "coklu://pair/v1/00"]).unwrap();
+        let parsed = parse(["pair", "nexkvm://pair/v1/00"]).unwrap();
         assert_eq!(
             parsed.command,
             Command::Pair {
-                uri: "coklu://pair/v1/00".into()
+                uri: "nexkvm://pair/v1/00".into()
             }
         );
     }
@@ -227,7 +227,7 @@ mod tests {
         let bootstrap = PairingBootstrap::new(
             "studio-mac",
             PublicKey(vec![7, 7, 7, 7]),
-            [0u8; coklu_crypto::NONCE_LEN],
+            [0u8; nexkvm_crypto::NONCE_LEN],
             "192.168.1.5:47654",
         );
         let rendered = format_pairing(&bootstrap);

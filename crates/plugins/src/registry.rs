@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use coklu_core::Event;
+use nexkvm_core::Event;
 
 use crate::capability::PluginCapabilities;
 use crate::error::PluginError;
@@ -152,7 +152,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use async_trait::async_trait;
-    use coklu_core::DeviceInfo;
+    use nexkvm_core::DeviceInfo;
 
     use super::*;
     use crate::{PluginManifest, PluginRuntimeKind};
@@ -169,7 +169,7 @@ mod tests {
         fn new(required: PluginCapabilities) -> Self {
             Self {
                 manifest: PluginManifest {
-                    id: "dev.coklu.test".into(),
+                    id: "dev.nexkvm.test".into(),
                     name: "Test".into(),
                     version: "1.0.0".into(),
                     description: String::new(),
@@ -233,7 +233,7 @@ mod tests {
         registry
             .dispatch(&Event::DeviceDiscovered(DeviceInfo::new(
                 "peer",
-                coklu_core::OsKind::Linux,
+                nexkvm_core::OsKind::Linux,
             )))
             .await;
         registry.dispatch(&Event::Shutdown).await;
@@ -250,7 +250,7 @@ mod tests {
             .register(plugin, PluginCapabilities::none())
             .await
             .unwrap();
-        registry.unload("dev.coklu.test").await.unwrap();
+        registry.unload("dev.nexkvm.test").await.unwrap();
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
         assert!(registry.is_empty());
     }

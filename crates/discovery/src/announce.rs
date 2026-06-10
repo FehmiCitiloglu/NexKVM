@@ -14,13 +14,13 @@
 
 use std::collections::HashMap;
 
-use coklu_core::identity::{DeviceId, DeviceInfo, OsKind};
+use nexkvm_core::identity::{DeviceId, DeviceInfo, OsKind};
 use serde::{Deserialize, Serialize};
 
 use crate::DiscoveryError;
 
-/// DNS-SD service type for coklu peers.
-pub const SERVICE_TYPE: &str = "_coklu._udp.local.";
+/// DNS-SD service type for nexkvm peers.
+pub const SERVICE_TYPE: &str = "_nexkvm._udp.local.";
 
 /// Default port peers listen on for discovery datagrams (distinct from the
 /// session listen port so discovery and data planes never collide).
@@ -28,7 +28,7 @@ pub const DEFAULT_DISCOVERY_PORT: u16 = 47_655;
 
 /// Magic prefix on every UDP announcement datagram. The trailing version digit
 /// lets the wire format evolve without ambiguity.
-const MAGIC: &[u8] = b"COKLU/disc/1\n";
+const MAGIC: &[u8] = b"NEXKVM/disc/1\n";
 
 /// Metadata a device advertises on the LAN.
 ///

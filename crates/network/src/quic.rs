@@ -12,7 +12,7 @@
 //! research notes track this); they slot in behind the same [`Connection`] API.
 //!
 //! # Security
-//! For the LAN/pairing model coklu uses **self-signed, device-keyed**
+//! For the LAN/pairing model nexkvm uses **self-signed, device-keyed**
 //! certificates pinned via the `crypto` trust store (TOFU-then-pinned), not a
 //! public CA. This module currently wires a development certificate path; the
 //! security phase replaces verification with trust-store pinning. The
@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use coklu_protocol::{Envelope, FrameCodec};
+use nexkvm_protocol::{Envelope, FrameCodec};
 use quinn::{Endpoint, RecvStream, SendStream};
 use tokio::sync::Mutex;
 
@@ -32,7 +32,7 @@ use crate::wire;
 
 const READ_CHUNK: usize = 8 * 1024;
 /// ALPN protocol identifier negotiated on the QUIC/TLS handshake.
-const ALPN: &[u8] = b"coklu/1";
+const ALPN: &[u8] = b"nexkvm/1";
 /// Single byte the dialer writes to materialize the control stream so the
 /// acceptor's `accept_bi` resolves. Carries the protocol major version.
 const STREAM_PROLOGUE: u8 = 1;
@@ -166,7 +166,7 @@ impl Transport for QuicTransport {
     async fn connect(&self, addr: SocketAddr) -> Result<Box<dyn Connection>, NetworkError> {
         let connecting = self
             .endpoint
-            .connect(addr, "coklu")
+            .connect(addr, "nexkvm")
             .map_err(|e| NetworkError::Io(std::io::Error::other(e.to_string())))?;
         let conn = connecting.await?;
         // Dialer opens the first bidirectional stream. A zero-length write emits
@@ -214,7 +214,7 @@ mod tls {
 
     /// Build (server, client) configs sharing one self-signed cert.
     pub fn dev_configs() -> Result<(ServerConfig, ClientConfig), NetworkError> {
-        let cert = rcgen::generate_simple_self_signed(vec!["coklu".into()]).map_err(io)?;
+        let cert = rcgen::generate_simple_self_signed(vec!["nexkvm".into()]).map_err(io)?;
         let cert_der = CertificateDer::from(cert.cert.der().to_vec());
         let key_der = PrivateKeyDer::try_from(cert.key_pair.serialize_der()).map_err(io)?;
 
@@ -300,7 +300,7 @@ fn ensure_crypto_provider() {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use coklu_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
+    use nexkvm_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
 
     fn loopback() -> SocketAddr {
         "127.0.0.1:0".parse().unwrap()

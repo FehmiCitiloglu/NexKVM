@@ -1,6 +1,6 @@
 //! LAN device discovery.
 //!
-//! coklu auto-discovers peers on the local network so pairing is zero-config.
+//! nexkvm auto-discovers peers on the local network so pairing is zero-config.
 //! Two backends share one [`ServiceAnnouncement`] model and one TTL-based
 //! [`DiscoveryRegistry`]:
 //!
@@ -12,7 +12,7 @@
 //! Both implement the [`Discovery`] trait so the rest of the platform consumes
 //! discovery events without binding to a specific backend. Discovered peers are
 //! *advertised*, not *trusted*: a [`DiscoveredDevice`] becomes usable only after
-//! pairing via `coklu-crypto`. [`ReconnectPlanner`] then schedules silent
+//! pairing via `nexkvm-crypto`. [`ReconnectPlanner`] then schedules silent
 //! reconnection to peers already present in the trust store.
 
 mod announce;
@@ -31,7 +31,7 @@ mod mdns;
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
-use coklu_core::identity::DeviceInfo;
+use nexkvm_core::identity::DeviceInfo;
 use thiserror::Error;
 
 pub use announce::{DEFAULT_DISCOVERY_PORT, SERVICE_TYPE, ServiceAnnouncement};

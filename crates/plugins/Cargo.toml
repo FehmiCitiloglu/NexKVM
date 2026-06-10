@@ -1,6 +1,6 @@
 [package]
-name = "coklu-plugins"
-description = "Plugin API and sandboxed runtime model for coklu."
+name = "nexkvm-plugins"
+description = "Plugin API and sandboxed runtime model for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,8 +19,8 @@ runtime-wasm = []
 runtime-lua = []
 
 [dependencies]
-coklu-core.workspace = true
-coklu-protocol.workspace = true
+nexkvm-core.workspace = true
+nexkvm-protocol.workspace = true
 bytes.workspace = true
 serde.workspace = true
 thiserror.workspace = true

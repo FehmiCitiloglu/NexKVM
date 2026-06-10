@@ -2,7 +2,7 @@
 //! and as a gyro mouse, producing the same platform-neutral `InputEvent`s a
 //! desktop peer would — all through the public API.
 
-use coklu_input::{
+use nexkvm_input::{
     GyroConfig, GyroMouse, InputEvent, MobileInputMode, MouseButton, Orientation, TouchPhase,
     TouchPoint, TouchSample, TouchpadConfig, TouchpadTranslator,
 };

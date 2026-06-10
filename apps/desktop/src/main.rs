@@ -1,4 +1,4 @@
-//! coklu desktop daemon entry point.
+//! nexkvm desktop daemon entry point.
 //!
 //! Foundation-phase wiring: initialize telemetry, load config, construct the
 //! event bus and platform backend, report negotiated protocol version and
@@ -6,11 +6,11 @@
 //! input pipelines, and the plugin host are attached in subsequent phases.
 
 use anyhow::Context;
-use coklu_core::platform::PlatformBackend;
-use coklu_core::{DeviceInfo, EventBus};
-use coklu_protocol::{PROTOCOL_VERSION, VersionRange};
-use coklu_storage::{Config, current_os};
-use coklu_telemetry::LogLevel;
+use nexkvm_core::platform::PlatformBackend;
+use nexkvm_core::{DeviceInfo, EventBus};
+use nexkvm_protocol::{PROTOCOL_VERSION, VersionRange};
+use nexkvm_storage::{Config, current_os};
+use nexkvm_telemetry::LogLevel;
 use tracing::info;
 
 mod cli;
@@ -56,12 +56,12 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     }
 
     // 2. Telemetry: install the tracing subscriber before anything else logs.
-    coklu_telemetry::init(&config.telemetry).context("initializing telemetry")?;
+    nexkvm_telemetry::init(&config.telemetry).context("initializing telemetry")?;
 
     info!(
         version = %PROTOCOL_VERSION,
         supported = %VersionRange::current(),
-        "starting coklu daemon"
+        "starting nexkvm daemon"
     );
 
     // 3. Identity for this device.
@@ -108,7 +108,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         .await
         .context("waiting for shutdown signal")?;
     info!("shutdown requested");
-    bus.publish(coklu_core::Event::Shutdown);
+    bus.publish(nexkvm_core::Event::Shutdown);
 
     Ok(())
 }
@@ -123,12 +123,12 @@ fn start_discovery(
     device: &DeviceInfo,
     config: &Config,
     config_path: &std::path::Path,
-) -> anyhow::Result<std::sync::Arc<coklu_discovery::DiscoveryService>> {
+) -> anyhow::Result<std::sync::Arc<nexkvm_discovery::DiscoveryService>> {
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
 
-    use coklu_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
-    use coklu_storage::FileTrustStore;
+    use nexkvm_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
+    use nexkvm_storage::FileTrustStore;
 
     // Build the trust allowlist from persisted pairings (advisory matching).
     let trust_path = config_path
@@ -145,7 +145,7 @@ fn start_discovery(
         }
     };
 
-    let backend = UdpDiscovery::bind(device.id, coklu_discovery::UdpConfig::default())
+    let backend = UdpDiscovery::bind(device.id, nexkvm_discovery::UdpConfig::default())
         .context("binding UDP discovery socket")?;
     let service = Arc::new(DiscoveryService::new(
         Arc::new(backend),
@@ -181,7 +181,7 @@ fn start_discovery(
 
 /// List trusted (paired) devices from the persisted trust store.
 fn list_devices() -> anyhow::Result<()> {
-    use coklu_storage::FileTrustStore;
+    use nexkvm_storage::FileTrustStore;
 
     let path = trust_path();
     let store = FileTrustStore::load(&path)
@@ -190,14 +190,14 @@ fn list_devices() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Decode a `coklu://` pairing bootstrap and print it for fingerprint
+/// Decode a `nexkvm://` pairing bootstrap and print it for fingerprint
 /// confirmation. The network handshake itself is wired in a later phase; this
 /// surfaces the out-of-band authenticator the user must verify.
 fn pair(uri: &str) -> anyhow::Result<()> {
-    use coklu_crypto::PairingBootstrap;
+    use nexkvm_crypto::PairingBootstrap;
 
     let bootstrap = PairingBootstrap::from_uri(uri)
-        .context("decoding pairing uri (expected coklu://pair/v1/…)")?;
+        .context("decoding pairing uri (expected nexkvm://pair/v1/…)")?;
     println!("{}", cli::format_pairing(&bootstrap));
     Ok(())
 }
@@ -206,7 +206,7 @@ fn doctor() -> anyhow::Result<()> {
     let path = config_path();
     let config =
         Config::load(&path).with_context(|| format!("loading config from {}", path.display()))?;
-    println!("coklu doctor");
+    println!("nexkvm doctor");
     println!("  os: {:?}", current_os());
     println!("  config: {}", path.display());
     println!("  device name: {}", config.device.name);
@@ -267,7 +267,7 @@ fn config_path() -> std::path::PathBuf {
     } else {
         std::path::PathBuf::from(".")
     };
-    base.join("coklu").join("config.toml")
+    base.join("nexkvm").join("config.toml")
 }
 
 /// Resolve the trust-store path (sibling of the config file).
@@ -282,15 +282,15 @@ fn trust_path() -> std::path::PathBuf {
 fn platform_backend() -> Option<Box<dyn PlatformBackend>> {
     #[cfg(target_os = "macos")]
     {
-        Some(Box::new(coklu_platform_macos::MacosBackend::new()))
+        Some(Box::new(nexkvm_platform_macos::MacosBackend::new()))
     }
     #[cfg(target_os = "linux")]
     {
-        Some(Box::new(coklu_platform_linux::LinuxBackend::new()))
+        Some(Box::new(nexkvm_platform_linux::LinuxBackend::new()))
     }
     #[cfg(target_os = "windows")]
     {
-        Some(Box::new(coklu_platform_windows::WindowsBackend::new()))
+        Some(Box::new(nexkvm_platform_windows::WindowsBackend::new()))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {

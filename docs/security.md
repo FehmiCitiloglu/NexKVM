@@ -1,6 +1,6 @@
 # Security
 
-coklu treats continuity features as sensitive: they can move input, clipboard content, files, audio, screen data, app launches, and collaborative control across devices. Security is mandatory, layered, and fail-closed.
+nexkvm treats continuity features as sensitive: they can move input, clipboard content, files, audio, screen data, app launches, and collaborative control across devices. Security is mandatory, layered, and fail-closed.
 
 ## Threat Model
 
@@ -32,7 +32,7 @@ Preferred transport order:
 2. TCP fallback when QUIC/UDP is blocked.
 3. WebRTC for future remote mode.
 
-Transport TLS is not enough by itself. coklu also requires app-layer session security bound to paired device identity.
+Transport TLS is not enough by itself. nexkvm also requires app-layer session security bound to paired device identity.
 
 ## Replay Protection
 

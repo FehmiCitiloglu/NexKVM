@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use coklu_core::identity::DeviceInfo;
+use nexkvm_core::identity::DeviceInfo;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
 use crate::announce::{SERVICE_TYPE, ServiceAnnouncement};

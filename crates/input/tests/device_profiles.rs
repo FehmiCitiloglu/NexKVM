@@ -2,8 +2,8 @@
 //! performance profiles, keyboard layouts, and hotkey mappings through the
 //! public API, with a clean fallback to the default profile.
 
-use coklu_core::identity::DeviceId;
-use coklu_input::{
+use nexkvm_core::identity::DeviceId;
+use nexkvm_input::{
     DeviceProfileStore, DeviceUxProfile, Hotkey, HotkeyAction, KeyboardLayout, ModifierState,
     PointerMode,
 };

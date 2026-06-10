@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=coklu
+Name=nexkvm
 Comment=Cross-platform device continuity daemon
-Exec=coklu
-Icon=coklu
+Exec=nexkvm
+Icon=nexkvm
 Terminal=true
 Categories=Utility;Network;

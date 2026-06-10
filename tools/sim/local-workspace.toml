@@ -1,4 +1,4 @@
-# Local sans-IO simulation environment for coklu developer workflows.
+# Local sans-IO simulation environment for nexkvm developer workflows.
 # The desktop CLI validates and summarizes this file today; later phases can
 # feed it into simulated discovery, latency, workspace, and collaboration flows.
 

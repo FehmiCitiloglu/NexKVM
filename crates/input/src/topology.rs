@@ -9,7 +9,7 @@
 //! `platform-*` crates; Wayland may expose reduced monitor data through portals,
 //! so callers should tolerate stale or partial live previews.
 
-use coklu_core::identity::DeviceId;
+use nexkvm_core::identity::DeviceId;
 use serde::{Deserialize, Serialize};
 
 use crate::boundary::{Edge, EdgeLink};

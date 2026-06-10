@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use coklu_core::identity::{DeviceId, DeviceInfo};
+use nexkvm_core::identity::{DeviceId, DeviceInfo};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
@@ -217,7 +217,7 @@ fn announcement_to_device(ann: &ServiceAnnouncement, src: SocketAddr) -> Discove
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coklu_core::identity::OsKind;
+    use nexkvm_core::identity::OsKind;
 
     #[tokio::test]
     async fn receives_unicast_announcement_into_registry() {

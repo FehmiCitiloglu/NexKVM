@@ -1,6 +1,6 @@
 [package]
-name = "coklu-crypto"
-description = "Pairing, device authentication, and session security model for coklu."
+name = "nexkvm-crypto"
+description = "Pairing, device authentication, and session security model for nexkvm."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

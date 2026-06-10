@@ -3,8 +3,8 @@
 //! cache on the next hover — all through the public API.
 
 use bytes::Bytes;
-use coklu_core::identity::DeviceId;
-use coklu_streaming::{
+use nexkvm_core::identity::DeviceId;
+use nexkvm_streaming::{
     CaptureSource, CaptureSourceId, EncodedScreenFrame, FrameDependency, HardwareEncoder,
     HoverPreviewController, PreviewDecision, PreviewPolicy, ScreenCodec, ScreenFrameType,
     ScreenResolution, ScreenStreamCapabilities, ScreenStreamIntent, WindowVisibility,

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This slice improves the existing `coklu simulate [toml]` developer command so
+This slice improves the existing `nexkvm simulate [toml]` developer command so
 the foundation-phase project can show useful, testable progress without adding
 native OS integrations. The command will validate the local simulation file and
 render a deterministic summary of devices, trust state, and planned connection
@@ -34,11 +34,11 @@ network planning types where they already fit.
 
 ## User-Facing Behavior
 
-`cargo run -p coklu -- simulate tools/sim/local-workspace.toml` prints a concise
+`cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml` prints a concise
 report:
 
 ```text
-coklu simulation
+nexkvm simulation
 config: tools/sim/local-workspace.toml
 
 devices:
@@ -114,7 +114,7 @@ Testing follows TDD:
 2. Verify each new test fails for the expected reason.
 3. Implement the smallest simulation model and validator that passes.
 4. Add CLI rendering tests for stable output.
-5. Add or update an integration test that runs `coklu simulate
+5. Add or update an integration test that runs `nexkvm simulate
    tools/sim/local-workspace.toml`.
 6. Run the focused package tests, then the broader workspace tests if the
    sandbox allows them.

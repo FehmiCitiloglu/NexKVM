@@ -1,6 +1,6 @@
 [package]
-name = "coklu-mobile-future"
-description = "Placeholder for the future coklu mobile companion (Android/iOS)."
+name = "nexkvm-mobile-future"
+description = "Placeholder for the future nexkvm mobile companion (Android/iOS)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,4 +13,4 @@ publish = false
 workspace = true
 
 [dependencies]
-coklu-core.workspace = true
+nexkvm-core.workspace = true

@@ -1,6 +1,6 @@
 # Documentation
 
-This directory collects the stable design contracts for coklu. Research notes live under `docs/research/`; product-facing and contributor-facing contracts live here.
+This directory collects the stable design contracts for nexkvm. Research notes live under `docs/research/`; product-facing and contributor-facing contracts live here.
 
 ## Core Docs
 

@@ -1,13 +1,13 @@
 //! The plugin trait and its host-provided context.
 
 use async_trait::async_trait;
-use coklu_core::Event;
+use nexkvm_core::Event;
 
 use crate::capability::PluginCapabilities;
 use crate::error::PluginError;
 use crate::manifest::PluginManifest;
 
-/// Host-provided handle a plugin uses to interact with coklu.
+/// Host-provided handle a plugin uses to interact with nexkvm.
 ///
 /// All side effects are mediated here so the host can enforce
 /// [`PluginCapabilities`] and, under the WASM backend, marshal calls across the
@@ -29,7 +29,7 @@ impl PluginContext {
     }
 }
 
-/// A coklu plugin.
+/// A nexkvm plugin.
 ///
 /// Lifecycle: [`on_load`](Plugin::on_load) once at registration, then
 /// [`on_event`](Plugin::on_event) for each relevant event, then

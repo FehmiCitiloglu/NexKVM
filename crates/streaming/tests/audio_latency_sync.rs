@@ -3,7 +3,7 @@
 //! through the public API.
 
 use bytes::Bytes;
-use coklu_streaming::{AudioCodec, AudioFrame, AudioJitterBuffer, JitterConfig, JitterOutput};
+use nexkvm_streaming::{AudioCodec, AudioFrame, AudioJitterBuffer, JitterConfig, JitterOutput};
 
 fn frame(sequence: u64) -> AudioFrame {
     AudioFrame {

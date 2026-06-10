@@ -19,7 +19,7 @@
 
 use std::time::{Duration, Instant};
 
-use coklu_protocol::Envelope;
+use nexkvm_protocol::Envelope;
 
 /// Tunables for adaptive batching.
 #[derive(Debug, Clone, Copy)]
@@ -138,7 +138,7 @@ impl AdaptiveBuffer {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use coklu_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
+    use nexkvm_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
 
     fn env(id: u64) -> Envelope {
         Envelope::new(

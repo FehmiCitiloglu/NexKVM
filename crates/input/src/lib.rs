@@ -9,7 +9,7 @@
 //! - **macOS** needs Accessibility permission for both capture and injection.
 //! - **Wayland** forbids global capture/injection; it must go through portals
 //!   (`libei`). Callers should consult
-//!   [`PlatformCapabilities`](coklu_core::PlatformCapabilities) first.
+//!   [`PlatformCapabilities`](nexkvm_core::PlatformCapabilities) first.
 //! - **Windows** uses raw input + `SendInput`; injection into elevated windows
 //!   may be blocked by UIPI.
 //!

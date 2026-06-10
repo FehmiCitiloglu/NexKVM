@@ -3,13 +3,13 @@
 //! exercising boundary detection, multi-monitor mapping, and the focus state
 //! machine through the public API.
 
-use coklu_core::identity::DeviceId;
-use coklu_input::{
+use nexkvm_core::identity::DeviceId;
+use nexkvm_input::{
     CursorFocus, DisplayRect, Edge, EdgeLink, InputEvent, MonitorId, MonitorLayout,
     MouseShareController, ShareOutput,
 };
 // `BoundaryDetector` is re-exported for constructing the controller.
-use coklu_input::BoundaryDetector;
+use nexkvm_input::BoundaryDetector;
 
 fn layout_1080p() -> MonitorLayout {
     MonitorLayout::new(vec![(MonitorId(0), DisplayRect::new(0, 0, 1920, 1080))])

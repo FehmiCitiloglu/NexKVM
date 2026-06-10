@@ -1,4 +1,4 @@
-//! Pairing & security model for coklu.
+//! Pairing & security model for nexkvm.
 //!
 //! This crate defines the *model* — the types and trait boundaries — for how
 //! devices establish trust and secure a session. The session layer includes a
