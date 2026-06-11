@@ -1,0 +1,342 @@
+# Feature List
+
+This file is the project feature tracker for NexKVM. Keep it updated as work
+lands:
+
+- `[ ]` means planned or not production-ready.
+- `[x]` means implemented in the repository at the stated level.
+- Move an item from "Planned Features" to "Implemented Features" when it
+  becomes a working repository feature, not just a design note.
+- If a feature is implemented only as a model, trait boundary, or planner, keep
+  that scope explicit.
+
+## Current Project Phase
+
+NexKVM is in a foundation phase. Many features are implemented as portable Rust
+models, protocol/security contracts, trait boundaries, CLI surfaces, and
+Sans-IO state machines. Several user-visible native integrations are still
+planned.
+
+## Implemented Features
+
+### Workspace And Project Structure
+
+- [x] Cross-platform Rust workspace with desktop, future mobile, core, protocol,
+  crypto, network, discovery, input, clipboard, streaming, plugins, storage,
+  telemetry, and platform crates.
+- [x] Desktop daemon crate and developer CLI entrypoint.
+- [x] Future mobile companion placeholder crate for Android and iOS targets.
+- [x] Platform-specific crate boundaries for macOS, Linux, and Windows.
+
+### Developer CLI And Daemon Foundation
+
+- [x] `nexkvm doctor` diagnostics command.
+- [x] `nexkvm protocol` protocol compatibility command.
+- [x] `nexkvm config-path` command.
+- [x] `nexkvm devices` trusted-device listing command.
+- [x] `nexkvm pair <uri>` pairing bootstrap decode and fingerprint display.
+- [x] `nexkvm simulate [toml]` basic simulation-file summary.
+- [x] `--debug` flag for raising daemon log verbosity.
+- [x] Daemon startup wiring for config loading, telemetry, device identity,
+  event bus, platform backend resolution, and graceful shutdown.
+- [x] UDP LAN discovery startup in daemon mode.
+- [x] Trusted-peer rediscovery logging through discovery service.
+
+### Protocol
+
+- [x] Protocol version model and version negotiation.
+- [x] Network message envelope with monotonic message IDs.
+- [x] Stable message kind routing discriminants.
+- [x] Length-prefixed stream frame codec.
+- [x] Maximum frame-size guard.
+- [x] Zero-copy packet decode model.
+- [x] Protocol fuzz target for malformed input.
+- [x] Cross-crate protocol pipeline integration test.
+
+### Security, Pairing, And Trust
+
+- [x] Device identity and public-key trust model.
+- [x] QR/bootstrap pairing URI model.
+- [x] Short confirmation/fingerprint display flow.
+- [x] In-memory trust store.
+- [x] File-backed trust store.
+- [x] Session security trait boundary.
+- [x] ChaCha20-Poly1305 AEAD session security implementation.
+- [x] Monotonic message ID and nonce-based replay-protection model.
+- [x] Pairing-flow integration test.
+
+### Discovery
+
+- [x] LAN discovery trait.
+- [x] UDP broadcast discovery backend.
+- [x] Service announcement model.
+- [x] TTL-based discovery registry.
+- [x] Fingerprint allowlist for advisory trust matching.
+- [x] Trusted reconnect planner.
+- [x] Proximity and presence scoring model.
+- [x] Internet discovery record/candidate model.
+- [x] UDP discovery service integration test.
+- [x] mDNS feature gate and abstraction.
+
+### Network
+
+- [x] Transport and connection traits.
+- [x] Transport selector.
+- [x] TCP transport backend.
+- [x] QUIC feature-gated backend surface.
+- [x] WebRTC feature-gated remote-mode planning surface.
+- [x] Wire codec between protocol envelopes and bytes.
+- [x] Resumable in-process session model.
+- [x] Heartbeat and liveness monitor.
+- [x] RTT and jitter tracker.
+- [x] Network quality estimator.
+- [x] Exponential reconnect backoff.
+- [x] Adaptive outbound buffering.
+- [x] Bandwidth adaptation model.
+- [x] Remote-session offer/answer security gate.
+- [x] Mesh routing policy model.
+- [x] Relay admission and route policy model.
+- [x] Browser remote-session ticket planning.
+- [x] Latency benchmark suite.
+
+### Input
+
+- [x] Platform-neutral input event model.
+- [x] Input capture and injection trait boundaries.
+- [x] Mouse sharing controller.
+- [x] Keyboard sharing controller.
+- [x] Modifier release handling during focus switch.
+- [x] Device UX profile store.
+- [x] Hotkey and quick-switch model.
+- [x] Monitor layout and spatial topology model.
+- [x] Cursor boundary detection.
+- [x] Cursor handoff and return model.
+- [x] Input batching and coalescing.
+- [x] Predictive cursor model.
+- [x] Adaptive polling model.
+- [x] Cursor acceleration model.
+- [x] Cursor interpolation and transition model.
+- [x] Infinite desktop navigation.
+- [x] Gesture switching and momentum transfer models.
+- [x] Mobile touchpad translation model.
+- [x] Mobile gyro mouse model.
+- [x] Platform injection translation helpers.
+
+### Clipboard
+
+- [x] Multi-format clipboard content and snapshot model.
+- [x] Clipboard platform access trait.
+- [x] Clipboard compression and decompression.
+- [x] Clipboard encryption boundary.
+- [x] Session-backed clipboard cipher adapter.
+- [x] Conflict resolver with last-writer-wins and echo suppression.
+- [x] Bounded deduplicated clipboard history.
+- [x] Shared clipboard timeline and restore planning.
+- [x] Clipboard sync state machine.
+- [x] Clipboard engine model.
+
+### Streaming, File Transfer, Audio, And Screen Models
+
+- [x] Reliable ordered streaming error/model boundaries.
+- [x] File transfer manifest and entry model.
+- [x] Transfer queue and progress snapshots.
+- [x] Resume checkpoint model.
+- [x] Chunked transfer sender and receiver.
+- [x] Transfer reassembly.
+- [x] Transfer compression.
+- [x] Transfer encryption boundary.
+- [x] Hover preview controller.
+- [x] Audio device, format, frame, and route models.
+- [x] Follow-mouse and shared-headset audio routing model.
+- [x] Audio jitter buffer.
+- [x] Screen capture and encoder trait boundaries.
+- [x] Screen stream capability negotiation.
+- [x] Hardware encoder capability model.
+- [x] Screen preview and instant app preview planning models.
+
+### Core Workspace, Collaboration, Automation, And Management
+
+- [x] Stable device identity model.
+- [x] In-process async event bus.
+- [x] Platform capability descriptor.
+- [x] Shared workspace model.
+- [x] Unified virtual desktop model.
+- [x] Window snapping planner.
+- [x] Spatial navigation model.
+- [x] Flick/throw planner.
+- [x] Workspace search and shared memory models.
+- [x] Collaboration session model.
+- [x] Participant roles and permissions.
+- [x] Shared cursor update model.
+- [x] Scoped control lease model.
+- [x] Automation trigger/action/rule model.
+- [x] Quick command and command palette model.
+- [x] Cross-device notification model.
+- [x] Script engine trait boundary.
+- [x] Cloud sync configuration model.
+- [x] Enterprise policy model.
+- [x] Team collaboration space model.
+
+### Plugins
+
+- [x] Plugin lifecycle trait.
+- [x] Plugin context and event hook model.
+- [x] Plugin manifest model.
+- [x] Least-privilege plugin capability model.
+- [x] Plugin registry with capability-filtered event dispatch.
+- [x] Plugin runtime trait and descriptor model.
+- [x] Sandbox level and resource-limit model.
+- [x] Host broker and host-call permission model.
+- [x] Marketplace listing and installability policy model.
+- [x] Hot reload tracker.
+- [x] WASM and Lua runtime feature gates.
+
+### Storage, Telemetry, Tooling, And Packaging
+
+- [x] TOML user configuration schema.
+- [x] Platform-aware config path resolution in desktop app.
+- [x] JSON trust-store persistence.
+- [x] Tracing-based telemetry initialization.
+- [x] Optional JSON telemetry output feature.
+- [x] Cargo-native test, clippy, doc, fuzz, bench, and deny tooling docs.
+- [x] CI workflow definitions.
+- [x] Scheduled/manual fuzz workflow definition.
+- [x] Release workflow definition.
+- [x] Linux desktop file and package metadata.
+- [x] macOS bundle metadata.
+- [x] Windows NSIS installer script.
+- [x] Package helper scripts.
+
+### Platform Capability Foundations
+
+- [x] macOS platform backend skeleton.
+- [x] Windows platform backend skeleton.
+- [x] Linux platform backend with session, desktop, portal, PipeWire, X11, and
+  handheld capability analysis.
+- [x] macOS injection translation helper model.
+- [x] Linux injection translation helper model.
+- [x] Windows injection translation helper model.
+
+## Planned Features
+
+### Native Platform Integrations
+
+- [ ] macOS Accessibility permission prompt and capability refresh.
+- [ ] macOS input capture via native APIs.
+- [ ] macOS input injection via native APIs.
+- [ ] macOS clipboard backend using `NSPasteboard`.
+- [ ] macOS screen capture using Screen Recording APIs.
+- [ ] macOS media encoding through VideoToolbox.
+- [ ] Linux Wayland portal-mediated input capture and injection.
+- [ ] Linux PipeWire screen capture.
+- [ ] Linux PipeWire audio routing backend.
+- [ ] Linux X11 input and clipboard fallback implementation.
+- [ ] Windows input capture via Raw Input or low-level hooks.
+- [ ] Windows input injection via `SendInput`.
+- [ ] Windows clipboard backend.
+- [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
+- [ ] Windows audio routing via WASAPI.
+- [ ] Runtime capability reporting for denied native permissions.
+
+### Networking And Sessions
+
+- [ ] Real network dial on trusted peer rediscovery.
+- [ ] User-confirmed pairing handshake over the network.
+- [ ] Trust-store write path after confirmed pairing.
+- [ ] Authenticated reconnect path for trusted devices.
+- [ ] TCP transport hardened with TLS.
+- [ ] QUIC transport fully wired as preferred LAN path.
+- [ ] App-layer session security wired into all transport traffic.
+- [ ] Replay rejection enforced in concrete receive paths.
+- [ ] WebRTC NAT traversal for remote mode.
+- [ ] STUN/TURN configuration and remote signaling flow.
+- [ ] Self-hosted relay server integration.
+- [ ] Managed relay integration.
+- [ ] Browser remote-session runtime flow.
+
+### Product Features
+
+- [ ] End-to-end keyboard and mouse sharing between real devices.
+- [ ] Real cursor edge crossing between machines.
+- [ ] Real shared clipboard read/write/sync between machines.
+- [ ] Drag-and-drop file transfer between machines.
+- [ ] Background file/folder transfer UI or daemon flow.
+- [ ] Follow-mouse audio routing.
+- [ ] Shared headset mode.
+- [ ] Screen streaming.
+- [ ] Window hover preview backed by live capture.
+- [ ] Instant app preview backed by live capture.
+- [ ] Unified virtual desktop UI.
+- [ ] Cross-device window snapping.
+- [ ] Global workspace search.
+- [ ] Cross-device app launch.
+- [ ] Shared workspace memory.
+- [ ] Shared cursor collaboration.
+- [ ] Pair programming collaborative control flow.
+- [ ] Remote teaching/control leases with revocation UI.
+- [ ] Cross-device notifications surfaced in UI.
+- [ ] Quick command palette UI.
+- [ ] Automation scripting runtime.
+
+### Mobile Companion
+
+- [ ] Android mobile companion app.
+- [ ] iOS mobile companion app.
+- [ ] Mobile pairing flow.
+- [ ] Mobile touchpad-to-desktop runtime path.
+- [ ] Mobile gyro-to-desktop runtime path.
+- [ ] Mobile clipboard integration.
+- [ ] Mobile backgrounding and permission model.
+- [ ] Secure mobile key storage.
+
+### Plugins And Marketplace
+
+- [ ] Real WASM/WASI plugin runtime.
+- [ ] Real Lua plugin runtime.
+- [ ] Stable host-call ABI for sandboxed plugins.
+- [ ] Signed plugin artifact verification.
+- [ ] Persistent plugin install state.
+- [ ] Plugin capability review UI.
+- [ ] Marketplace trust UI.
+- [ ] Plugin install, update, disable, and uninstall flows.
+
+### Cloud, Enterprise, And Teams
+
+- [ ] Opt-in cloud sync runtime.
+- [ ] End-to-end encrypted cloud payload upload.
+- [ ] Cloud sync provider integration.
+- [ ] Enterprise policy enforcement across runtime paths.
+- [ ] Team collaboration runtime flow.
+- [ ] Team membership management UI or CLI.
+- [ ] Managed-device deployment policy.
+
+### Simulation And Developer Experience
+
+- [ ] Typed TOML parsing for `nexkvm simulate`.
+- [ ] Simulation validation for empty, duplicated, malformed, or unknown devices.
+- [ ] Simulation output with device ID, display name, OS, address, and trust
+  state.
+- [ ] Simulation connection planning for direct LAN, reconnect candidate,
+  missing trust, and invalid configuration.
+- [ ] Stable integration test for simulation report output.
+- [ ] Feed simulation data into discovery, latency, workspace, screen, and
+  collaboration simulators.
+
+### Release Readiness
+
+- [ ] First-launch platform smoke records.
+- [ ] Permission prompt smoke records.
+- [ ] Input capture and injection smoke records.
+- [ ] Clipboard sync smoke records.
+- [ ] Pairing, restart, and trusted reconnect smoke records.
+- [ ] Denied-permission behavior smoke records.
+- [ ] Installer upgrade and uninstall smoke records.
+- [ ] macOS signed and notarized archive.
+- [ ] Windows signed installer.
+- [ ] Linux `.deb` artifact.
+- [ ] Linux `.rpm` artifact.
+- [ ] Linux AppImage artifact.
+- [ ] Checksums for release artifacts.
+- [ ] Changelog and known limitations.
+- [ ] SBOM or dependency report.
+- [ ] Smoke-test evidence for every supported OS.
