@@ -7,13 +7,17 @@
 
 use anyhow::Context;
 use nexkvm_core::platform::PlatformBackend;
-use nexkvm_core::{DeviceInfo, EventBus};
+use nexkvm_core::{DeviceInfo, EventBus, NativeIntegrationReport};
+use nexkvm_network::Transport;
 use nexkvm_protocol::{PROTOCOL_VERSION, VersionRange};
 use nexkvm_storage::{Config, current_os};
 use nexkvm_telemetry::LogLevel;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use tracing::info;
 
 mod cli;
+mod connection;
 
 use cli::Command;
 
@@ -88,10 +92,27 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         "configuration loaded"
     );
 
-    // 6. LAN discovery: advertise this device and auto-reconnect trusted peers.
+    // 6. Cross-platform TCP transport: universal desktop fallback for inbound
+    //    and trusted rediscovery connections.
+    let listen_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.network.listen_port));
+    let transport = match nexkvm_network::TcpTransport::bind(listen_addr).await {
+        Ok(tcp) => {
+            let local_addr = tcp.local_addr().context("resolving TCP listen address")?;
+            let transport: Arc<dyn Transport> = Arc::new(tcp);
+            connection::spawn_inbound_accept_loop(Arc::clone(&transport));
+            info!(addr = %local_addr, "TCP transport listening");
+            Some(transport)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "TCP transport disabled (bind failed)");
+            None
+        }
+    };
+
+    // 7. LAN discovery: advertise this device and auto-reconnect trusted peers.
     //    Kept alive for the daemon's lifetime; dropping it aborts its tasks.
     let _discovery = if config.network.enable_discovery {
-        match start_discovery(&device, &config, &config_path) {
+        match start_discovery(&device, &config, &config_path, transport) {
             Ok(service) => Some(service),
             Err(e) => {
                 tracing::warn!(error = %e, "LAN discovery disabled (startup failed)");
@@ -103,7 +124,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         None
     };
 
-    // 7. Run until Ctrl-C, then signal a graceful shutdown on the bus.
+    // 8. Run until Ctrl-C, then signal a graceful shutdown on the bus.
     tokio::signal::ctrl_c()
         .await
         .context("waiting for shutdown signal")?;
@@ -114,19 +135,14 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
 }
 
 /// Start LAN discovery: advertise over UDP broadcast and stream trusted-peer
-/// reconnect targets to a logging driver. Returns the live service so the caller
-/// keeps it alive; dropping it stops discovery.
-///
-/// Networking is wired in a later phase, so reconnect targets are logged rather
-/// than dialed; the discovery, trust-gating, and backoff machinery all run.
+/// reconnect targets to the transport driver. Returns the live service so the
+/// caller keeps it alive; dropping it stops discovery.
 fn start_discovery(
     device: &DeviceInfo,
     config: &Config,
     config_path: &std::path::Path,
+    transport: Option<Arc<dyn Transport>>,
 ) -> anyhow::Result<std::sync::Arc<nexkvm_discovery::DiscoveryService>> {
-    use std::net::{Ipv4Addr, SocketAddr};
-    use std::sync::Arc;
-
     use nexkvm_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
     use nexkvm_storage::FileTrustStore;
 
@@ -165,14 +181,17 @@ fn start_discovery(
             }
         };
         info!(port = listen_addr.port(), "LAN discovery advertising");
-        while let Some(target) = targets.recv().await {
-            // Phase placeholder: network crate will dial and report back.
-            info!(
-                device = %target.device.info.name,
-                addr = %target.device.addr,
-                attempt = target.attempt,
-                "trusted peer rediscovered; reconnect pending network integration"
-            );
+        if let Some(transport) = transport {
+            connection::spawn_reconnect_driver(Arc::clone(&driver), transport, targets);
+        } else {
+            while let Some(target) = targets.recv().await {
+                tracing::warn!(
+                    device = %target.device.info.name,
+                    addr = %target.device.addr,
+                    attempt = target.attempt,
+                    "trusted peer rediscovered but no transport is available"
+                );
+            }
         }
     });
 
@@ -223,7 +242,13 @@ fn doctor() -> anyhow::Result<()> {
         config.collaboration.shared_cursor
     );
     match platform_backend() {
-        Some(backend) => println!("  platform capabilities: {:?}", backend.capabilities()),
+        Some(backend) => {
+            let report =
+                NativeIntegrationReport::from_capabilities(backend.os(), backend.capabilities());
+            for line in cli::format_native_integrations(&report).lines() {
+                println!("  {line}");
+            }
+        }
         None => println!("  platform capabilities: headless/unsupported OS"),
     }
     Ok(())

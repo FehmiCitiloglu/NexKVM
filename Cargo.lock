@@ -764,6 +764,7 @@ dependencies = [
  "async-trait",
  "nexkvm-core",
  "nexkvm-input",
+ "tokio",
 ]
 
 [[package]]

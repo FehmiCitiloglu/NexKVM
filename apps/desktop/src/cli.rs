@@ -7,6 +7,7 @@
 
 use std::fmt::Write as _;
 
+use nexkvm_core::NativeIntegrationReport;
 use nexkvm_crypto::{PairingBootstrap, TrustEntry};
 
 /// A parsed CLI subcommand.
@@ -142,6 +143,22 @@ pub fn format_pairing(bootstrap: &PairingBootstrap) -> String {
     )
 }
 
+/// Render native integration availability for `nexkvm doctor`.
+#[must_use]
+pub fn format_native_integrations(report: &NativeIntegrationReport) -> String {
+    let mut out = format!("native integrations: {:?}\n", report.os);
+    for entry in &report.integrations {
+        let _ = writeln!(
+            out,
+            "  {}: {}",
+            entry.integration.label(),
+            entry.status.label()
+        );
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +251,31 @@ mod tests {
         assert!(rendered.contains("studio-mac"));
         assert!(rendered.contains("192.168.1.5:47654"));
         assert!(rendered.contains(&bootstrap.public_key.fingerprint()));
+    }
+
+    #[test]
+    fn native_integration_report_is_formatted_for_doctor() {
+        use nexkvm_core::{
+            NativeIntegration, NativeIntegrationAvailability, NativeIntegrationReport,
+            NativeIntegrationStatus, OsKind,
+        };
+
+        let rendered = format_native_integrations(&NativeIntegrationReport {
+            os: OsKind::MacOs,
+            integrations: vec![
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::InputCapture,
+                    status: NativeIntegrationStatus::PermissionRequired,
+                },
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::Clipboard,
+                    status: NativeIntegrationStatus::Unsupported,
+                },
+            ],
+        });
+
+        assert!(rendered.contains("native integrations: MacOs"));
+        assert!(rendered.contains("input-capture: permission-required"));
+        assert!(rendered.contains("clipboard: unsupported"));
     }
 }

@@ -41,6 +41,7 @@ planned.
   event bus, platform backend resolution, and graceful shutdown.
 - [x] UDP LAN discovery startup in daemon mode.
 - [x] Trusted-peer rediscovery logging through discovery service.
+- [x] Trusted-peer rediscovery to cross-platform TCP connection driver.
 
 ### Protocol
 
@@ -83,6 +84,7 @@ planned.
 - [x] Transport and connection traits.
 - [x] Transport selector.
 - [x] TCP transport backend.
+- [x] Desktop daemon TCP listener and inbound connection accept loop.
 - [x] QUIC feature-gated backend surface.
 - [x] WebRTC feature-gated remote-mode planning surface.
 - [x] Wire codec between protocol envelopes and bytes.
@@ -210,9 +212,12 @@ planned.
 ### Platform Capability Foundations
 
 - [x] macOS platform backend skeleton.
+- [x] macOS Accessibility permission prompt and capability refresh.
 - [x] Windows platform backend skeleton.
 - [x] Linux platform backend with session, desktop, portal, PipeWire, X11, and
   handheld capability analysis.
+- [x] Runtime native integration reporting for available, permission-required,
+  and unsupported platform capabilities.
 - [x] macOS injection translation helper model.
 - [x] Linux injection translation helper model.
 - [x] Windows injection translation helper model.
@@ -221,7 +226,6 @@ planned.
 
 ### Native Platform Integrations
 
-- [ ] macOS Accessibility permission prompt and capability refresh.
 - [ ] macOS input capture via native APIs.
 - [ ] macOS input injection via native APIs.
 - [ ] macOS clipboard backend using `NSPasteboard`.
@@ -236,7 +240,6 @@ planned.
 - [ ] Windows clipboard backend.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.
-- [ ] Runtime capability reporting for denied native permissions.
 
 ### Networking And Sessions
 

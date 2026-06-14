@@ -50,7 +50,10 @@ pub use management::{
     CloudSyncConfig, CloudSyncMode, CloudSyncProvider, EnterprisePolicy, ManagedFeature,
     ManagementError, PolicyDecision, TeamCollaborationSpace, TeamId, TeamMember, TeamMemberRole,
 };
-pub use platform::{PlatformBackend, PlatformCapabilities};
+pub use platform::{
+    NativeIntegration, NativeIntegrationAvailability, NativeIntegrationReport,
+    NativeIntegrationStatus, PlatformBackend, PlatformCapabilities,
+};
 pub use workspace::{
     AppId, AppLaunchOutcome, AppLaunchRequest, ApplicationDescriptor, FlickPlanner, FlickVector,
     MemoryVisibility, ScreenPoint, SearchKind, SearchQuery, SearchResult, SharedWorkspaceMemory,

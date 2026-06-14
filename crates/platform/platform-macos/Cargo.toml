@@ -15,3 +15,6 @@ workspace = true
 nexkvm-core.workspace = true
 nexkvm-input.workspace = true
 async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

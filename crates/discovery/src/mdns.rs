@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use nexkvm_core::identity::DeviceInfo;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use nexkvm_core::identity::DeviceInfo;
 
 use crate::announce::{SERVICE_TYPE, ServiceAnnouncement};
 use crate::registry::{DEFAULT_TTL, DiscoveryRegistry};

@@ -52,6 +52,147 @@ impl PlatformCapabilities {
     }
 }
 
+/// Native OS integration surfaces that product features can depend on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeIntegration {
+    /// Global input capture from the local OS.
+    InputCapture,
+    /// Global input injection into the local OS.
+    InputInjection,
+    /// System clipboard read/write.
+    Clipboard,
+    /// Screen capture through the local display stack.
+    ScreenCapture,
+    /// Audio route/device control through the local audio stack.
+    AudioRouting,
+    /// Hardware or OS media encoding.
+    MediaEncoding,
+}
+
+impl NativeIntegration {
+    /// Stable lowercase label for diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::InputCapture => "input-capture",
+            Self::InputInjection => "input-injection",
+            Self::Clipboard => "clipboard",
+            Self::ScreenCapture => "screen-capture",
+            Self::AudioRouting => "audio-routing",
+            Self::MediaEncoding => "media-encoding",
+        }
+    }
+}
+
+/// Runtime status of a native integration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeIntegrationStatus {
+    /// The integration is available for this process/session.
+    Available,
+    /// The OS can plausibly grant this integration, but permission is pending.
+    PermissionRequired,
+    /// The current backend/session does not support this integration yet.
+    Unsupported,
+}
+
+impl NativeIntegrationStatus {
+    /// Stable lowercase label for diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::PermissionRequired => "permission-required",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// One native integration status entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeIntegrationAvailability {
+    /// Integration surface.
+    pub integration: NativeIntegration,
+    /// Runtime status.
+    pub status: NativeIntegrationStatus,
+}
+
+/// Runtime native integration report for diagnostics and feature gating.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeIntegrationReport {
+    /// OS family the report applies to.
+    pub os: OsKind,
+    /// Per-integration status entries.
+    pub integrations: Vec<NativeIntegrationAvailability>,
+}
+
+impl NativeIntegrationReport {
+    /// Build a cross-platform report from the backend capability summary.
+    #[must_use]
+    pub fn from_capabilities(os: OsKind, capabilities: PlatformCapabilities) -> Self {
+        let input_capture = input_status(
+            capabilities.can_capture_input,
+            capabilities.permission_pending,
+        );
+        let input_injection = input_status(
+            capabilities.can_inject_input,
+            capabilities.permission_pending,
+        );
+
+        Self {
+            os,
+            integrations: vec![
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::InputCapture,
+                    status: input_capture,
+                },
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::InputInjection,
+                    status: input_injection,
+                },
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::Clipboard,
+                    status: if capabilities.can_access_clipboard {
+                        NativeIntegrationStatus::Available
+                    } else {
+                        NativeIntegrationStatus::Unsupported
+                    },
+                },
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::ScreenCapture,
+                    status: NativeIntegrationStatus::Unsupported,
+                },
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::AudioRouting,
+                    status: NativeIntegrationStatus::Unsupported,
+                },
+                NativeIntegrationAvailability {
+                    integration: NativeIntegration::MediaEncoding,
+                    status: NativeIntegrationStatus::Unsupported,
+                },
+            ],
+        }
+    }
+
+    /// Return the status for one integration surface.
+    #[must_use]
+    pub fn status(&self, integration: NativeIntegration) -> Option<NativeIntegrationStatus> {
+        self.integrations
+            .iter()
+            .find(|entry| entry.integration == integration)
+            .map(|entry| entry.status)
+    }
+}
+
+fn input_status(available: bool, permission_pending: bool) -> NativeIntegrationStatus {
+    if available {
+        NativeIntegrationStatus::Available
+    } else if permission_pending {
+        NativeIntegrationStatus::PermissionRequired
+    } else {
+        NativeIntegrationStatus::Unsupported
+    }
+}
+
 /// The OS integration surface implemented per platform.
 ///
 /// Async because acquiring capabilities may involve awaiting a permission
@@ -74,4 +215,62 @@ pub trait PlatformBackend: Send + Sync {
     /// Returns [`CoreError::Unsupported`] if the platform cannot grant the
     /// capability at all (e.g. headless session).
     async fn request_permissions(&self) -> Result<PlatformCapabilities, CoreError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_integration_report_marks_available_capabilities() {
+        let report = NativeIntegrationReport::from_capabilities(
+            OsKind::Linux,
+            PlatformCapabilities {
+                can_inject_input: true,
+                can_capture_input: true,
+                can_access_clipboard: true,
+                permission_pending: false,
+            },
+        );
+
+        assert_eq!(report.os, OsKind::Linux);
+        assert_eq!(
+            report.status(NativeIntegration::InputInjection),
+            Some(NativeIntegrationStatus::Available)
+        );
+        assert_eq!(
+            report.status(NativeIntegration::InputCapture),
+            Some(NativeIntegrationStatus::Available)
+        );
+        assert_eq!(
+            report.status(NativeIntegration::Clipboard),
+            Some(NativeIntegrationStatus::Available)
+        );
+    }
+
+    #[test]
+    fn native_integration_report_marks_permission_required_input() {
+        let report = NativeIntegrationReport::from_capabilities(
+            OsKind::MacOs,
+            PlatformCapabilities {
+                can_inject_input: false,
+                can_capture_input: false,
+                can_access_clipboard: false,
+                permission_pending: true,
+            },
+        );
+
+        assert_eq!(
+            report.status(NativeIntegration::InputInjection),
+            Some(NativeIntegrationStatus::PermissionRequired)
+        );
+        assert_eq!(
+            report.status(NativeIntegration::InputCapture),
+            Some(NativeIntegrationStatus::PermissionRequired)
+        );
+        assert_eq!(
+            report.status(NativeIntegration::Clipboard),
+            Some(NativeIntegrationStatus::Unsupported)
+        );
+    }
 }
