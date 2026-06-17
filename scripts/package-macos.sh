@@ -9,6 +9,19 @@ ARCHIVE="$DIST/nexkvm-macos-universal-${VERSION}.zip"
 LOGO_PNG="$ROOT/packaging/assets/nexkvm-logo.png"
 ICONSET_DIR="$DIST/nexkvm.iconset"
 ICNS_OUT="$APP_DIR/Contents/Resources/nexkvm.icns"
+ENTITLEMENTS="$ROOT/packaging/macos/nexkvm.entitlements"
+RELEASE="${NEXKVM_RELEASE:-0}"
+
+if [[ "$RELEASE" == "1" ]]; then
+  if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
+    echo "NEXKVM_RELEASE=1 requires APPLE_CODESIGN_IDENTITY"
+    exit 1
+  fi
+  if [[ -z "${APPLE_NOTARY_PROFILE:-}" ]]; then
+    echo "NEXKVM_RELEASE=1 requires APPLE_NOTARY_PROFILE"
+    exit 1
+  fi
+fi
 
 mkdir -p "$DIST"
 
@@ -39,7 +52,7 @@ rm -rf "$ICONSET_DIR"
 
 if [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
   echo "Signing app bundle with identity: $APPLE_CODESIGN_IDENTITY"
-  codesign --force --deep --timestamp --options runtime --sign "$APPLE_CODESIGN_IDENTITY" "$APP_DIR"
+  codesign --force --deep --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_CODESIGN_IDENTITY" "$APP_DIR"
 else
   echo "APPLE_CODESIGN_IDENTITY not set; building unsigned bundle"
 fi
@@ -56,4 +69,12 @@ if [[ -n "${APPLE_NOTARY_PROFILE:-}" ]]; then
   echo "Notarized archive ready: $ARCHIVE"
 else
   echo "APPLE_NOTARY_PROFILE not set; skipping notarization"
+fi
+
+if [[ "$RELEASE" == "1" ]]; then
+  echo "Validating signed and notarized app..."
+  codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+  codesign -dvvv --entitlements :- "$APP_DIR"
+  xcrun stapler validate "$APP_DIR"
+  spctl -a -vv "$APP_DIR"
 fi

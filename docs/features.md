@@ -42,6 +42,8 @@ planned.
 - [x] UDP LAN discovery startup in daemon mode.
 - [x] Trusted-peer rediscovery logging through discovery service.
 - [x] Trusted-peer rediscovery to cross-platform TCP connection driver.
+- [x] Input sharing runtime configuration for disabled, source, target, and
+  both roles.
 
 ### Protocol
 
@@ -85,6 +87,8 @@ planned.
 - [x] Transport selector.
 - [x] TCP transport backend.
 - [x] Desktop daemon TCP listener and inbound connection accept loop.
+- [x] Testable input envelope codec and connection routing helpers over peer
+  connections.
 - [x] QUIC feature-gated backend surface.
 - [x] WebRTC feature-gated remote-mode planning surface.
 - [x] Wire codec between protocol envelopes and bytes.
@@ -206,6 +210,8 @@ planned.
 - [x] Release workflow definition.
 - [x] Linux desktop file and package metadata.
 - [x] macOS bundle metadata.
+- [x] macOS release packaging validation scaffolding for Developer ID signing,
+  hardened runtime, notarization, stapling, and Gatekeeper checks.
 - [x] Windows NSIS installer script.
 - [x] Package helper scripts.
 
@@ -213,6 +219,8 @@ planned.
 
 - [x] macOS platform backend skeleton.
 - [x] macOS Accessibility permission prompt and capability refresh.
+- [x] macOS keyboard/mouse permission diagnostics in `doctor`.
+- [x] macOS input capture and injection permission-gated runtime boundaries.
 - [x] Windows platform backend skeleton.
 - [x] Linux platform backend with session, desktop, portal, PipeWire, X11, and
   handheld capability analysis.
