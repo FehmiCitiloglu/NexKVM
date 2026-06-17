@@ -7,6 +7,8 @@ use nexkvm_network::{Connection, NetworkError, Transport, TransportKind};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+pub type PeerConnectionHandler = Arc<dyn Fn(Box<dyn Connection>) + Send + Sync>;
+
 /// A successful outbound reconnect attempt.
 pub struct ConnectedPeer {
     pub device_id: DeviceId,
@@ -33,7 +35,10 @@ pub async fn connect_reconnect_target(
 }
 
 /// Accept inbound links for the daemon lifetime.
-pub fn spawn_inbound_accept_loop(transport: Arc<dyn Transport>) {
+pub fn spawn_inbound_accept_loop(
+    transport: Arc<dyn Transport>,
+    handler: Option<PeerConnectionHandler>,
+) {
     tokio::spawn(async move {
         loop {
             match transport.accept().await {
@@ -41,9 +46,13 @@ pub fn spawn_inbound_accept_loop(transport: Arc<dyn Transport>) {
                     let peer = connection.peer_addr();
                     let kind = connection.kind();
                     info!(%peer, ?kind, "accepted peer connection");
-                    tokio::spawn(async move {
-                        hold_connection_until_closed(connection).await;
-                    });
+                    if let Some(handler) = &handler {
+                        handler(connection);
+                    } else {
+                        tokio::spawn(async move {
+                            hold_connection_until_closed(connection).await;
+                        });
+                    }
                 }
                 Err(error) => {
                     warn!(%error, "failed to accept peer connection");

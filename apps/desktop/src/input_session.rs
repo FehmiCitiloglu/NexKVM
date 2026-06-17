@@ -77,6 +77,47 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputRuntimeRole {
+    Disabled,
+    Source,
+    Target,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputRuntimePlan {
+    pub start_capture_forwarder: bool,
+    pub start_inject_receiver: bool,
+}
+
+pub fn plan_runtime(role: InputRuntimeRole, permissions_ready: bool) -> InputRuntimePlan {
+    if !permissions_ready {
+        return InputRuntimePlan {
+            start_capture_forwarder: false,
+            start_inject_receiver: false,
+        };
+    }
+    match role {
+        InputRuntimeRole::Disabled => InputRuntimePlan {
+            start_capture_forwarder: false,
+            start_inject_receiver: false,
+        },
+        InputRuntimeRole::Source => InputRuntimePlan {
+            start_capture_forwarder: true,
+            start_inject_receiver: false,
+        },
+        InputRuntimeRole::Target => InputRuntimePlan {
+            start_capture_forwarder: false,
+            start_inject_receiver: true,
+        },
+        InputRuntimeRole::Both => InputRuntimePlan {
+            start_capture_forwarder: true,
+            start_inject_receiver: true,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +281,35 @@ mod tests {
                 InputEvent::ButtonPress(nexkvm_input::MouseButton::Left),
                 InputEvent::ButtonRelease(nexkvm_input::MouseButton::Left),
             ]
+        );
+    }
+
+    #[test]
+    fn target_role_starts_receiver_only_when_permissions_are_ready() {
+        assert_eq!(
+            plan_runtime(InputRuntimeRole::Target, true),
+            InputRuntimePlan {
+                start_capture_forwarder: false,
+                start_inject_receiver: true,
+            }
+        );
+        assert_eq!(
+            plan_runtime(InputRuntimeRole::Target, false),
+            InputRuntimePlan {
+                start_capture_forwarder: false,
+                start_inject_receiver: false,
+            }
+        );
+    }
+
+    #[test]
+    fn source_role_starts_capture_only_when_permissions_are_ready() {
+        assert_eq!(
+            plan_runtime(InputRuntimeRole::Source, true),
+            InputRuntimePlan {
+                start_capture_forwarder: true,
+                start_inject_receiver: false,
+            }
         );
     }
 }

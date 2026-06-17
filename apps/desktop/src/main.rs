@@ -93,6 +93,24 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         "configuration loaded"
     );
 
+    let input_role = input_runtime_role(config.input.control_role);
+    #[cfg(target_os = "macos")]
+    let input_permissions_ready = {
+        let macos = nexkvm_platform_macos::MacosBackend::new();
+        let report = macos.input_permission_report();
+        report.can_capture_input && report.can_inject_input
+    };
+    #[cfg(not(target_os = "macos"))]
+    let input_permissions_ready = false;
+    let input_plan = input_session::plan_runtime(input_role, input_permissions_ready);
+    info!(
+        role = ?input_role,
+        permissions_ready = input_permissions_ready,
+        capture = input_plan.start_capture_forwarder,
+        inject = input_plan.start_inject_receiver,
+        "input runtime plan"
+    );
+
     // 6. Cross-platform TCP transport: universal desktop fallback for inbound
     //    and trusted rediscovery connections.
     let listen_addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.network.listen_port));
@@ -100,7 +118,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         Ok(tcp) => {
             let local_addr = tcp.local_addr().context("resolving TCP listen address")?;
             let transport: Arc<dyn Transport> = Arc::new(tcp);
-            connection::spawn_inbound_accept_loop(Arc::clone(&transport));
+            connection::spawn_inbound_accept_loop(Arc::clone(&transport), None);
             info!(addr = %local_addr, "TCP transport listening");
             Some(transport)
         }
@@ -133,6 +151,15 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     bus.publish(nexkvm_core::Event::Shutdown);
 
     Ok(())
+}
+
+fn input_runtime_role(role: nexkvm_storage::InputControlRole) -> input_session::InputRuntimeRole {
+    match role {
+        nexkvm_storage::InputControlRole::Disabled => input_session::InputRuntimeRole::Disabled,
+        nexkvm_storage::InputControlRole::Source => input_session::InputRuntimeRole::Source,
+        nexkvm_storage::InputControlRole::Target => input_session::InputRuntimeRole::Target,
+        nexkvm_storage::InputControlRole::Both => input_session::InputRuntimeRole::Both,
+    }
 }
 
 /// Start LAN discovery: advertise over UDP broadcast and stream trusted-peer
