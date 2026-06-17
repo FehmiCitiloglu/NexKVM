@@ -235,7 +235,9 @@ mod tests {
     #[tokio::test]
     async fn injector_refuses_without_accessibility_permission() {
         let injector = MacosInputInjector::new(false);
-        let result = injector.inject(nexkvm_input::InputEvent::KeyPress(0x04)).await;
+        let result = injector
+            .inject(nexkvm_input::InputEvent::KeyPress(0x04))
+            .await;
 
         assert!(matches!(
             result,

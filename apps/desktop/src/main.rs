@@ -110,6 +110,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         inject = input_plan.start_inject_receiver,
         "input runtime plan"
     );
+    let input_peer_handler = input_peer_handler(input_plan, input_permissions_ready);
 
     // 6. Cross-platform TCP transport: universal desktop fallback for inbound
     //    and trusted rediscovery connections.
@@ -118,7 +119,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         Ok(tcp) => {
             let local_addr = tcp.local_addr().context("resolving TCP listen address")?;
             let transport: Arc<dyn Transport> = Arc::new(tcp);
-            connection::spawn_inbound_accept_loop(Arc::clone(&transport), None);
+            connection::spawn_inbound_accept_loop(Arc::clone(&transport), input_peer_handler);
             info!(addr = %local_addr, "TCP transport listening");
             Some(transport)
         }
@@ -159,6 +160,35 @@ fn input_runtime_role(role: nexkvm_storage::InputControlRole) -> input_session::
         nexkvm_storage::InputControlRole::Source => input_session::InputRuntimeRole::Source,
         nexkvm_storage::InputControlRole::Target => input_session::InputRuntimeRole::Target,
         nexkvm_storage::InputControlRole::Both => input_session::InputRuntimeRole::Both,
+    }
+}
+
+fn input_peer_handler(
+    plan: input_session::InputRuntimePlan,
+    permissions_ready: bool,
+) -> Option<connection::PeerConnectionHandler> {
+    if !plan.start_inject_receiver {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let injector = nexkvm_platform_macos::MacosInputInjector::new(permissions_ready);
+        let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
+            let injector = injector;
+            tokio::spawn(async move {
+                if let Err(error) =
+                    input_session::inject_until_closed(&*connection, &injector).await
+                {
+                    tracing::warn!(%error, "input injection session ended");
+                }
+            });
+        });
+        Some(handler)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = permissions_ready;
+        None
     }
 }
 

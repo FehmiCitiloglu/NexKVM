@@ -11,6 +11,7 @@ pub enum InputSessionError {
     UnexpectedKind(MessageKind),
 }
 
+#[allow(dead_code)]
 pub fn encode_input_event(id: MessageId, event: InputEvent) -> Envelope {
     let body = serde_json::to_vec(&event).expect("InputEvent serialization is infallible");
     Envelope::new(PROTOCOL_VERSION, id, MessageKind::Input, Bytes::from(body))
@@ -36,6 +37,7 @@ impl From<InputError> for InputSessionError {
     }
 }
 
+#[allow(dead_code)]
 pub async fn forward_n_events<C, K>(
     capture: &C,
     connection: &K,

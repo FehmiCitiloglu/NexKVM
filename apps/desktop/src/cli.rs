@@ -304,7 +304,9 @@ mod tests {
             "permission-required",
             false,
             false,
-            Some("Grant Accessibility permission in System Settings > Privacy & Security > Accessibility"),
+            Some(
+                "Grant Accessibility permission in System Settings > Privacy & Security > Accessibility",
+            ),
         );
 
         assert!(rendered.contains("macOS input accessibility: permission-required"));

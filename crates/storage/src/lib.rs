@@ -144,10 +144,11 @@ impl Default for InputConfig {
 }
 
 /// Whether this daemon captures, injects, both, or neither.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InputControlRole {
     /// Do not run keyboard/mouse sharing.
+    #[default]
     Disabled,
     /// Capture local input and send it to `active_peer`.
     Source,
@@ -155,12 +156,6 @@ pub enum InputControlRole {
     Target,
     /// Enable source and target behavior.
     Both,
-}
-
-impl Default for InputControlRole {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 /// `[plugins]` section.
