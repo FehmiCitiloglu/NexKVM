@@ -52,6 +52,8 @@ pub struct Config {
     pub network: NetworkConfig,
     /// Security & pairing policy.
     pub security: SecurityConfig,
+    /// Keyboard/mouse sharing runtime settings.
+    pub input: InputConfig,
     /// Logging/diagnostics.
     pub telemetry: TelemetryConfig,
     /// Plugin runtime settings.
@@ -116,6 +118,48 @@ impl Default for SecurityConfig {
             require_pairing: true,
             trust_on_reconnect: true,
         }
+    }
+}
+
+/// `[input]` section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InputConfig {
+    /// Runtime role for keyboard/mouse sharing.
+    pub control_role: InputControlRole,
+    /// Friendly trusted-peer name or fingerprint selected as the active target.
+    pub active_peer: Option<String>,
+    /// HID usage id for the emergency stop key. Default 41 is Escape.
+    pub emergency_stop_keycode: u32,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self {
+            control_role: InputControlRole::Disabled,
+            active_peer: None,
+            emergency_stop_keycode: 41,
+        }
+    }
+}
+
+/// Whether this daemon captures, injects, both, or neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputControlRole {
+    /// Do not run keyboard/mouse sharing.
+    Disabled,
+    /// Capture local input and send it to `active_peer`.
+    Source,
+    /// Inject input received from a trusted peer.
+    Target,
+    /// Enable source and target behavior.
+    Both,
+}
+
+impl Default for InputControlRole {
+    fn default() -> Self {
+        Self::Disabled
     }
 }
 
@@ -272,6 +316,31 @@ mod tests {
             parsed.collaboration.default_control_lease_millis,
             cfg.collaboration.default_control_lease_millis
         );
+        assert_eq!(parsed.input.control_role, cfg.input.control_role);
+        assert_eq!(
+            parsed.input.emergency_stop_keycode,
+            cfg.input.emergency_stop_keycode
+        );
+    }
+
+    #[test]
+    fn input_config_round_trips_through_toml() {
+        let text = r#"
+[input]
+control_role = "source"
+active_peer = "studio-mac"
+emergency_stop_keycode = 41
+"#;
+
+        let parsed: Config = toml::from_str(text).unwrap();
+
+        assert_eq!(parsed.input.control_role, InputControlRole::Source);
+        assert_eq!(parsed.input.active_peer.as_deref(), Some("studio-mac"));
+        assert_eq!(parsed.input.emergency_stop_keycode, 41);
+
+        let rendered = toml::to_string_pretty(&parsed).unwrap();
+        assert!(rendered.contains("[input]"));
+        assert!(rendered.contains("control_role = \"source\""));
     }
 
     #[test]
