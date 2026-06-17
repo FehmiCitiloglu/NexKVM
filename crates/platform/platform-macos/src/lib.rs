@@ -15,9 +15,12 @@ use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
 use nexkvm_core::{CoreError, OsKind};
 
 mod accessibility;
+pub mod capture;
 pub mod inject;
 pub mod permissions;
 
+pub use capture::MacosInputCapture;
+pub use inject::MacosInputInjector;
 pub use permissions::{MacosInputPermissionReport, MacosPermissionState};
 
 /// macOS implementation of [`PlatformBackend`].
