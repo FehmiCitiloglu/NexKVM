@@ -13,7 +13,8 @@
 //! table (plus layout via `UCKeyTranslate`); this module passes the keycode
 //! through unchanged and records the intended event type.
 
-use nexkvm_input::{InjectionCommand, MouseButton};
+use async_trait::async_trait;
+use nexkvm_input::{InjectionCommand, InputError, InputEvent, InputInjector, MouseButton};
 
 /// Quartz `CGEventType` values relevant to injection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +136,38 @@ pub fn plan(command: InjectionCommand) -> CgEventPlan {
     }
 }
 
+/// macOS input injector boundary.
+///
+/// The current implementation enforces Accessibility permission and performs
+/// pure event planning. Native `CGEventPost` calls are attached in the next
+/// runtime slice.
+#[derive(Debug, Clone, Copy)]
+pub struct MacosInputInjector {
+    accessibility_trusted: bool,
+}
+
+impl MacosInputInjector {
+    /// Create an injector with the current Accessibility trust state.
+    #[must_use]
+    pub fn new(accessibility_trusted: bool) -> Self {
+        Self {
+            accessibility_trusted,
+        }
+    }
+}
+
+#[async_trait]
+impl InputInjector for MacosInputInjector {
+    async fn inject(&self, event: InputEvent) -> Result<(), InputError> {
+        if !self.accessibility_trusted {
+            return Err(InputError::PermissionDenied);
+        }
+        let command = event.to_injection_command();
+        let _event_plan = plan(command);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +230,26 @@ mod tests {
                 keycode: 0x04
             }
         );
+    }
+
+    #[tokio::test]
+    async fn injector_refuses_without_accessibility_permission() {
+        let injector = MacosInputInjector::new(false);
+        let result = injector.inject(nexkvm_input::InputEvent::KeyPress(0x04)).await;
+
+        assert!(matches!(
+            result,
+            Err(nexkvm_input::InputError::PermissionDenied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn injector_accepts_supported_event_when_accessibility_is_ready() {
+        let injector = MacosInputInjector::new(true);
+
+        injector
+            .inject(nexkvm_input::InputEvent::ButtonPress(MouseButton::Left))
+            .await
+            .unwrap();
     }
 }
