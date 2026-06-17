@@ -252,6 +252,27 @@ fn doctor() -> anyhow::Result<()> {
         }
         None => println!("  platform capabilities: headless/unsupported OS"),
     }
+    #[cfg(target_os = "macos")]
+    {
+        let backend = nexkvm_platform_macos::MacosBackend::new();
+        let report = backend.input_permission_report();
+        let accessibility = match report.accessibility {
+            nexkvm_platform_macos::MacosPermissionState::Ready => "ready",
+            nexkvm_platform_macos::MacosPermissionState::PermissionRequired => {
+                "permission-required"
+            }
+        };
+        for line in cli::format_macos_input_report(
+            accessibility,
+            report.can_capture_input,
+            report.can_inject_input,
+            report.next_step,
+        )
+        .lines()
+        {
+            println!("  {line}");
+        }
+    }
     Ok(())
 }
 

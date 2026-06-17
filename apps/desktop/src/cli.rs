@@ -159,6 +159,25 @@ pub fn format_native_integrations(report: &NativeIntegrationReport) -> String {
     out
 }
 
+/// Render macOS input permission details for `nexkvm doctor`.
+#[must_use]
+pub fn format_macos_input_report(
+    accessibility: &str,
+    can_capture_input: bool,
+    can_inject_input: bool,
+    next_step: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "macOS input accessibility: {accessibility}");
+    let _ = writeln!(out, "  capture ready: {can_capture_input}");
+    let _ = writeln!(out, "  inject ready: {can_inject_input}");
+    if let Some(next_step) = next_step {
+        let _ = writeln!(out, "  next step: {next_step}");
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +296,20 @@ mod tests {
         assert!(rendered.contains("native integrations: MacOs"));
         assert!(rendered.contains("input-capture: permission-required"));
         assert!(rendered.contains("clipboard: unsupported"));
+    }
+
+    #[test]
+    fn macos_input_report_includes_next_step_when_permission_missing() {
+        let rendered = format_macos_input_report(
+            "permission-required",
+            false,
+            false,
+            Some("Grant Accessibility permission in System Settings > Privacy & Security > Accessibility"),
+        );
+
+        assert!(rendered.contains("macOS input accessibility: permission-required"));
+        assert!(rendered.contains("capture ready: false"));
+        assert!(rendered.contains("inject ready: false"));
+        assert!(rendered.contains("Grant Accessibility permission"));
     }
 }

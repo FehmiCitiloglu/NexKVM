@@ -16,6 +16,9 @@ use nexkvm_core::{CoreError, OsKind};
 
 mod accessibility;
 pub mod inject;
+pub mod permissions;
+
+pub use permissions::{MacosInputPermissionReport, MacosPermissionState};
 
 /// macOS implementation of [`PlatformBackend`].
 #[derive(Debug)]
@@ -41,6 +44,12 @@ impl MacosBackend {
         Self {
             accessibility: Box::new(accessibility),
         }
+    }
+
+    /// Report macOS input permission readiness for diagnostics.
+    #[must_use]
+    pub fn input_permission_report(&self) -> MacosInputPermissionReport {
+        permissions::input_permission_report(self.accessibility.as_ref())
     }
 }
 
