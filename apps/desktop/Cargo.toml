@@ -28,6 +28,9 @@ nexkvm-plugins.workspace = true
 nexkvm-storage.workspace = true
 nexkvm-telemetry.workspace = true
 anyhow.workspace = true
+bytes.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 

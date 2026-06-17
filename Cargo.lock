@@ -635,6 +635,7 @@ name = "nexkvm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "nexkvm-clipboard",
  "nexkvm-core",
  "nexkvm-crypto",
@@ -649,6 +650,8 @@ dependencies = [
  "nexkvm-storage",
  "nexkvm-streaming",
  "nexkvm-telemetry",
+ "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
 ]

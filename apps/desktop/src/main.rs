@@ -18,6 +18,7 @@ use tracing::info;
 
 mod cli;
 mod connection;
+mod input_session;
 
 use cli::Command;
 
