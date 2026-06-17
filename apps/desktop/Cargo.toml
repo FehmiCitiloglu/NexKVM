@@ -28,6 +28,7 @@ nexkvm-plugins.workspace = true
 nexkvm-storage.workspace = true
 nexkvm-telemetry.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 bytes.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

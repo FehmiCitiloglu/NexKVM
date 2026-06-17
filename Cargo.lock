@@ -635,6 +635,7 @@ name = "nexkvm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "nexkvm-clipboard",
  "nexkvm-core",
