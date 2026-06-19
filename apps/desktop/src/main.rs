@@ -174,7 +174,7 @@ fn input_peer_handler(
     {
         let injector = nexkvm_platform_macos::MacosInputInjector::new(permissions_ready);
         let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
-            let injector = injector;
+            let injector = injector.clone();
             tokio::spawn(async move {
                 if let Err(error) =
                     input_session::inject_until_closed(&*connection, &injector).await

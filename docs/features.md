@@ -221,6 +221,8 @@ planned.
 - [x] macOS Accessibility permission prompt and capability refresh.
 - [x] macOS keyboard/mouse permission diagnostics in `doctor`.
 - [x] macOS input capture and injection permission-gated runtime boundaries.
+- [x] macOS native input injection posting for absolute pointer, buttons,
+  scroll, and MVP keyboard keys.
 - [x] Windows platform backend skeleton.
 - [x] Linux platform backend with session, desktop, portal, PipeWire, X11, and
   handheld capability analysis.
