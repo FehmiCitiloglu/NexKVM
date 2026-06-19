@@ -27,6 +27,8 @@ pub enum Command {
     Pair {
         /// The scanned/pasted `nexkvm://pair/v1/...` URI.
         uri: String,
+        /// Persist this peer into the local trust store after user confirmation.
+        accept: bool,
     },
     /// Validate a local simulation config.
     Simulate {
@@ -77,18 +79,32 @@ where
         Some("protocol") => Command::Protocol,
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
-        Some("pair") => {
-            let uri = it
-                .next()
-                .ok_or_else(|| "pair requires a nexkvm:// pairing uri".to_string())?;
-            Command::Pair { uri }
-        }
+        Some("pair") => parse_pair_args(it)?,
         Some("simulate") => Command::Simulate { path: it.next() },
         Some("help" | "--help" | "-h") => Command::Help,
         Some(other) => return Err(format!("unknown command `{other}`; run `nexkvm help`")),
     };
 
     Ok(Invocation { command, debug })
+}
+
+fn parse_pair_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut accept = false;
+    let mut uri = None;
+    for arg in args {
+        if arg == "--accept" {
+            accept = true;
+        } else if uri.is_none() {
+            uri = Some(arg);
+        } else {
+            return Err("pair accepts one nexkvm:// pairing uri".to_string());
+        }
+    }
+    let uri = uri.ok_or_else(|| "pair requires a nexkvm:// pairing uri".to_string())?;
+    Ok(Command::Pair { uri, accept })
 }
 
 /// Render the CLI usage text.
@@ -99,7 +115,7 @@ pub fn help_text() -> String {
     out.push_str("USAGE:\n");
     out.push_str("  nexkvm [--debug]            Run the desktop daemon\n");
     out.push_str("  nexkvm devices             List trusted (paired) devices\n");
-    out.push_str("  nexkvm pair <uri>          Decode a nexkvm:// pairing bootstrap\n");
+    out.push_str("  nexkvm pair [--accept] <uri> Decode or accept a pairing bootstrap\n");
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
@@ -140,6 +156,17 @@ pub fn format_pairing(bootstrap: &PairingBootstrap) -> String {
         bootstrap.display_name,
         bootstrap.addr,
         bootstrap.public_key.fingerprint(),
+    )
+}
+
+/// Render a persisted pairing acceptance.
+#[must_use]
+pub fn format_pairing_accepted(entry: &TrustEntry) -> String {
+    format!(
+        "trusted device accepted\n  name: {}\n  fingerprint: {}\n  paired_at: {}",
+        entry.display_name,
+        entry.public_key.fingerprint(),
+        entry.paired_at,
     )
 }
 
@@ -214,9 +241,24 @@ mod tests {
         assert_eq!(
             parsed.command,
             Command::Pair {
-                uri: "nexkvm://pair/v1/00".into()
+                uri: "nexkvm://pair/v1/00".into(),
+                accept: false,
             }
         );
+    }
+
+    #[test]
+    fn pair_accept_flag_is_position_independent() {
+        let before = parse(["pair", "--accept", "nexkvm://pair/v1/00"]).unwrap();
+        let after = parse(["pair", "nexkvm://pair/v1/00", "--accept"]).unwrap();
+        assert_eq!(
+            before.command,
+            Command::Pair {
+                uri: "nexkvm://pair/v1/00".into(),
+                accept: true,
+            }
+        );
+        assert_eq!(before, after);
     }
 
     #[test]
@@ -270,6 +312,18 @@ mod tests {
         assert!(rendered.contains("studio-mac"));
         assert!(rendered.contains("192.168.1.5:47654"));
         assert!(rendered.contains(&bootstrap.public_key.fingerprint()));
+    }
+
+    #[test]
+    fn pairing_acceptance_summary_shows_persisted_entry() {
+        let entry = entry("studio-mac", &[7, 7, 7, 7], 1_700_000_000);
+        let rendered = format_pairing_accepted(&entry);
+        assert!(rendered.contains("trusted device accepted"));
+        assert!(rendered.contains("studio-mac"));
+        assert!(rendered.contains(&entry.public_key.fingerprint()));
+        assert!(
+            rendered.contains("paired_at=1700000000") || rendered.contains("paired_at: 1700000000")
+        );
     }
 
     #[test]

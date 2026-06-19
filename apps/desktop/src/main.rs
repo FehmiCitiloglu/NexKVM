@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Command::Devices => return list_devices(),
-        Command::Pair { uri } => return pair(&uri),
+        Command::Pair { uri, accept } => return pair(&uri, accept),
         Command::Simulate { path } => return simulate(path),
         Command::Help => {
             print!("{}", cli::help_text());
@@ -267,15 +267,39 @@ fn list_devices() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Decode a `nexkvm://` pairing bootstrap and print it for fingerprint
-/// confirmation. The network handshake itself is wired in a later phase; this
-/// surfaces the out-of-band authenticator the user must verify.
-fn pair(uri: &str) -> anyhow::Result<()> {
-    use nexkvm_crypto::PairingBootstrap;
+/// Decode or accept a `nexkvm://` pairing bootstrap.
+///
+/// Without `accept`, this only prints the out-of-band fingerprint for human
+/// comparison. With `accept`, it persists the peer key into `trust.json`.
+fn pair(uri: &str, accept: bool) -> anyhow::Result<()> {
+    use nexkvm_crypto::{PairingBootstrap, TrustEntry, TrustStore};
+    use nexkvm_storage::FileTrustStore;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     let bootstrap = PairingBootstrap::from_uri(uri)
         .context("decoding pairing uri (expected nexkvm://pair/v1/…)")?;
-    println!("{}", cli::format_pairing(&bootstrap));
+    if !accept {
+        println!("{}", cli::format_pairing(&bootstrap));
+        return Ok(());
+    }
+
+    let paired_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_secs();
+    let entry = TrustEntry {
+        display_name: bootstrap.display_name,
+        public_key: bootstrap.public_key,
+        paired_at,
+    };
+    let path = trust_path();
+    let store = FileTrustStore::load(&path)
+        .with_context(|| format!("loading trust store from {}", path.display()))?;
+    store.insert(entry.clone());
+    store
+        .flush()
+        .with_context(|| format!("writing trust store to {}", path.display()))?;
+    println!("{}", cli::format_pairing_accepted(&entry));
     Ok(())
 }
 

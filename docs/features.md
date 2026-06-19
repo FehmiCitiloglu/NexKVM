@@ -35,6 +35,8 @@ planned.
 - [x] `nexkvm config-path` command.
 - [x] `nexkvm devices` trusted-device listing command.
 - [x] `nexkvm pair <uri>` pairing bootstrap decode and fingerprint display.
+- [x] `nexkvm pair --accept <uri>` trust-store write path after user-confirmed
+  pairing bootstrap.
 - [x] `nexkvm simulate [toml]` basic simulation-file summary.
 - [x] `--debug` flag for raising daemon log verbosity.
 - [x] Daemon startup wiring for config loading, telemetry, device identity,
@@ -63,6 +65,8 @@ planned.
 - [x] Short confirmation/fingerprint display flow.
 - [x] In-memory trust store.
 - [x] File-backed trust store.
+- [x] User-confirmed pairing bootstrap acceptance into the persisted trust
+  store.
 - [x] Session security trait boundary.
 - [x] ChaCha20-Poly1305 AEAD session security implementation.
 - [x] Monotonic message ID and nonce-based replay-protection model.
@@ -255,7 +259,6 @@ planned.
 
 - [ ] Real network dial on trusted peer rediscovery.
 - [ ] User-confirmed pairing handshake over the network.
-- [ ] Trust-store write path after confirmed pairing.
 - [ ] Authenticated reconnect path for trusted devices.
 - [ ] TCP transport hardened with TLS.
 - [ ] QUIC transport fully wired as preferred LAN path.
