@@ -37,6 +37,8 @@ planned.
 - [x] `nexkvm pair <uri>` pairing bootstrap decode and fingerprint display.
 - [x] `nexkvm pair --accept <uri>` trust-store write path after user-confirmed
   pairing bootstrap.
+- [x] `nexkvm pairing-uri <addr>` command for generating a testable pairing
+  bootstrap URI.
 - [x] `nexkvm simulate [toml]` basic simulation-file summary.
 - [x] `--debug` flag for raising daemon log verbosity.
 - [x] Daemon startup wiring for config loading, telemetry, device identity,
@@ -70,6 +72,7 @@ planned.
 - [x] Session security trait boundary.
 - [x] ChaCha20-Poly1305 AEAD session security implementation.
 - [x] Monotonic message ID and nonce-based replay-protection model.
+- [x] Trusted-peer key announcement handshake for pinned peers.
 - [x] Pairing-flow integration test.
 
 ### Discovery
@@ -96,6 +99,12 @@ planned.
 - [x] QUIC feature-gated backend surface.
 - [x] WebRTC feature-gated remote-mode planning surface.
 - [x] Wire codec between protocol envelopes and bytes.
+- [x] App-layer secure connection wrapper that seals/opens envelope bodies over
+  any transport connection.
+- [x] Replay/authentication rejection covered in the concrete secure receive
+  path.
+- [x] Daemon inbound/outbound TCP peer connections are wrapped in app-layer
+  session security after trusted-peer key handshake.
 - [x] Resumable in-process session model.
 - [x] Heartbeat and liveness monitor.
 - [x] RTT and jitter tracker.
@@ -257,13 +266,11 @@ planned.
 
 ### Networking And Sessions
 
-- [ ] Real network dial on trusted peer rediscovery.
-- [ ] User-confirmed pairing handshake over the network.
-- [ ] Authenticated reconnect path for trusted devices.
+- [ ] Private-key-backed device identity in OS keychain.
+- [ ] Proof-of-possession pairing handshake over the network.
+- [ ] Fully authenticated reconnect path for trusted devices.
 - [ ] TCP transport hardened with TLS.
 - [ ] QUIC transport fully wired as preferred LAN path.
-- [ ] App-layer session security wired into all transport traffic.
-- [ ] Replay rejection enforced in concrete receive paths.
 - [ ] WebRTC NAT traversal for remote mode.
 - [ ] STUN/TURN configuration and remote signaling flow.
 - [ ] Self-hosted relay server integration.

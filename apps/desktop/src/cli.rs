@@ -30,6 +30,11 @@ pub enum Command {
         /// Persist this peer into the local trust store after user confirmation.
         accept: bool,
     },
+    /// Generate this device's pairing bootstrap URI.
+    PairingUri {
+        /// Address peers should dial (`ip:port`).
+        addr: String,
+    },
     /// Validate a local simulation config.
     Simulate {
         /// Optional path to the simulation TOML.
@@ -80,6 +85,15 @@ where
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
         Some("pair") => parse_pair_args(it)?,
+        Some("pairing-uri") => {
+            let addr = it.next().ok_or_else(|| {
+                "pairing-uri requires an address like 192.168.1.20:47654".to_string()
+            })?;
+            if it.next().is_some() {
+                return Err("pairing-uri accepts one address".to_string());
+            }
+            Command::PairingUri { addr }
+        }
         Some("simulate") => Command::Simulate { path: it.next() },
         Some("help" | "--help" | "-h") => Command::Help,
         Some(other) => return Err(format!("unknown command `{other}`; run `nexkvm help`")),
@@ -116,6 +130,7 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm [--debug]            Run the desktop daemon\n");
     out.push_str("  nexkvm devices             List trusted (paired) devices\n");
     out.push_str("  nexkvm pair [--accept] <uri> Decode or accept a pairing bootstrap\n");
+    out.push_str("  nexkvm pairing-uri <addr>  Print this device's pairing bootstrap URI\n");
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
@@ -259,6 +274,20 @@ mod tests {
             }
         );
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn pairing_uri_requires_one_addr() {
+        assert!(parse(["pairing-uri"]).is_err());
+        assert!(parse(["pairing-uri", "a", "b"]).is_err());
+        assert_eq!(
+            parse(["pairing-uri", "192.168.1.40:47654"])
+                .unwrap()
+                .command,
+            Command::PairingUri {
+                addr: "192.168.1.40:47654".into()
+            }
+        );
     }
 
     #[test]

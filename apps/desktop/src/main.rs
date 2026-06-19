@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Devices => return list_devices(),
         Command::Pair { uri, accept } => return pair(&uri, accept),
+        Command::PairingUri { addr } => return pairing_uri(&addr),
         Command::Simulate { path } => return simulate(path),
         Command::Help => {
             print!("{}", cli::help_text());
@@ -111,6 +112,11 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         "input runtime plan"
     );
     let input_peer_handler = input_peer_handler(input_plan, input_permissions_ready);
+    let trusted_peer_keys = trusted_public_keys();
+    let session_config = connection::TrustedSessionConfig::new(
+        nexkvm_crypto::PublicKey(local_public_key(&config_path, &config.device.name)),
+        trusted_peer_keys,
+    );
 
     // 6. Cross-platform TCP transport: universal desktop fallback for inbound
     //    and trusted rediscovery connections.
@@ -119,7 +125,11 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         Ok(tcp) => {
             let local_addr = tcp.local_addr().context("resolving TCP listen address")?;
             let transport: Arc<dyn Transport> = Arc::new(tcp);
-            connection::spawn_inbound_accept_loop(Arc::clone(&transport), input_peer_handler);
+            connection::spawn_inbound_accept_loop(
+                Arc::clone(&transport),
+                input_peer_handler,
+                Some(session_config.clone()),
+            );
             info!(addr = %local_addr, "TCP transport listening");
             Some(transport)
         }
@@ -132,7 +142,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     // 7. LAN discovery: advertise this device and auto-reconnect trusted peers.
     //    Kept alive for the daemon's lifetime; dropping it aborts its tasks.
     let _discovery = if config.network.enable_discovery {
-        match start_discovery(&device, &config, &config_path, transport) {
+        match start_discovery(&device, &config, &config_path, transport, session_config) {
             Ok(service) => Some(service),
             Err(e) => {
                 tracing::warn!(error = %e, "LAN discovery disabled (startup failed)");
@@ -200,6 +210,7 @@ fn start_discovery(
     config: &Config,
     config_path: &std::path::Path,
     transport: Option<Arc<dyn Transport>>,
+    session_config: connection::TrustedSessionConfig,
 ) -> anyhow::Result<std::sync::Arc<nexkvm_discovery::DiscoveryService>> {
     use nexkvm_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
     use nexkvm_storage::FileTrustStore;
@@ -240,7 +251,12 @@ fn start_discovery(
         };
         info!(port = listen_addr.port(), "LAN discovery advertising");
         if let Some(transport) = transport {
-            connection::spawn_reconnect_driver(Arc::clone(&driver), transport, targets);
+            connection::spawn_reconnect_driver(
+                Arc::clone(&driver),
+                transport,
+                targets,
+                Some(session_config),
+            );
         } else {
             while let Some(target) = targets.recv().await {
                 tracing::warn!(
@@ -301,6 +317,45 @@ fn pair(uri: &str, accept: bool) -> anyhow::Result<()> {
         .with_context(|| format!("writing trust store to {}", path.display()))?;
     println!("{}", cli::format_pairing_accepted(&entry));
     Ok(())
+}
+
+/// Generate this device's pairing bootstrap URI.
+fn pairing_uri(addr: &str) -> anyhow::Result<()> {
+    use nexkvm_crypto::{PairingBootstrap, PublicKey};
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let config_path = config_path();
+    let config = Config::load(&config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+
+    let public_key = PublicKey(local_public_key(&config_path, &config.device.name));
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_nanos();
+    let mut hasher = Sha256::new();
+    hasher.update(b"nexkvm pairing nonce v1");
+    hasher.update(config.device.name.as_bytes());
+    hasher.update(addr.as_bytes());
+    hasher.update(now.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut nonce = [0u8; nexkvm_crypto::NONCE_LEN];
+    nonce.copy_from_slice(&digest);
+
+    let bootstrap = PairingBootstrap::new(config.device.name, public_key, nonce, addr);
+    println!("{}", bootstrap.to_uri());
+    Ok(())
+}
+
+fn local_public_key(config_path: &std::path::Path, device_name: &str) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"nexkvm local public identity placeholder v1");
+    hasher.update(config_path.to_string_lossy().as_bytes());
+    hasher.update(device_name.as_bytes());
+    hasher.finalize().to_vec()
 }
 
 fn doctor() -> anyhow::Result<()> {
@@ -404,6 +459,22 @@ fn trust_path() -> std::path::PathBuf {
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("trust.json")
+}
+
+fn trusted_public_keys() -> Vec<nexkvm_crypto::PublicKey> {
+    use nexkvm_storage::FileTrustStore;
+
+    match FileTrustStore::load(trust_path()) {
+        Ok(store) => store
+            .entries()
+            .into_iter()
+            .map(|entry| entry.public_key)
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "trust store unavailable; trusted sessions disabled");
+            Vec::new()
+        }
+    }
 }
 
 /// Construct the platform backend for the current OS, if one exists.

@@ -2,12 +2,31 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use nexkvm_core::identity::DeviceId;
+use nexkvm_crypto::PublicKey;
 use nexkvm_discovery::{DiscoveryService, ReconnectTarget};
-use nexkvm_network::{Connection, NetworkError, Transport, TransportKind};
+use nexkvm_network::{
+    Connection, NetworkError, SecureConnection, Transport, TransportKind, establish_trusted_session,
+};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 pub type PeerConnectionHandler = Arc<dyn Fn(Box<dyn Connection>) + Send + Sync>;
+
+/// Trusted-session material used to secure raw transport connections.
+#[derive(Debug, Clone)]
+pub struct TrustedSessionConfig {
+    local_public_key: PublicKey,
+    trusted_peer_keys: Arc<Vec<PublicKey>>,
+}
+
+impl TrustedSessionConfig {
+    pub fn new(local_public_key: PublicKey, trusted_peer_keys: Vec<PublicKey>) -> Self {
+        Self {
+            local_public_key,
+            trusted_peer_keys: Arc::new(trusted_peer_keys),
+        }
+    }
+}
 
 /// A successful outbound reconnect attempt.
 pub struct ConnectedPeer {
@@ -22,9 +41,10 @@ pub struct ConnectedPeer {
 pub async fn connect_reconnect_target(
     transport: Arc<dyn Transport>,
     target: ReconnectTarget,
+    session_config: Option<TrustedSessionConfig>,
 ) -> Result<ConnectedPeer, NetworkError> {
     let addr = target.device.addr;
-    let connection = transport.connect(addr).await?;
+    let connection = secure_connection(transport.connect(addr).await?, session_config).await?;
     Ok(ConnectedPeer {
         device_id: target.device.info.id,
         device_name: target.device.info.name,
@@ -38,6 +58,7 @@ pub async fn connect_reconnect_target(
 pub fn spawn_inbound_accept_loop(
     transport: Arc<dyn Transport>,
     handler: Option<PeerConnectionHandler>,
+    session_config: Option<TrustedSessionConfig>,
 ) {
     tokio::spawn(async move {
         loop {
@@ -46,11 +67,25 @@ pub fn spawn_inbound_accept_loop(
                     let peer = connection.peer_addr();
                     let kind = connection.kind();
                     info!(%peer, ?kind, "accepted peer connection");
+                    let session_config = session_config.clone();
                     if let Some(handler) = &handler {
-                        handler(connection);
+                        let handler = Arc::clone(handler);
+                        tokio::spawn(async move {
+                            match secure_connection(connection, session_config).await {
+                                Ok(connection) => handler(connection),
+                                Err(error) => {
+                                    warn!(%error, "trusted session handshake failed");
+                                }
+                            }
+                        });
                     } else {
                         tokio::spawn(async move {
-                            hold_connection_until_closed(connection).await;
+                            match secure_connection(connection, session_config).await {
+                                Ok(connection) => hold_connection_until_closed(connection).await,
+                                Err(error) => {
+                                    warn!(%error, "trusted session handshake failed");
+                                }
+                            }
                         });
                     }
                 }
@@ -67,12 +102,15 @@ pub fn spawn_reconnect_driver(
     service: Arc<DiscoveryService>,
     transport: Arc<dyn Transport>,
     mut targets: mpsc::Receiver<ReconnectTarget>,
+    session_config: Option<TrustedSessionConfig>,
 ) {
     tokio::spawn(async move {
         while let Some(target) = targets.recv().await {
             let device_id = target.device.info.id;
             let attempt = target.attempt;
-            match connect_reconnect_target(Arc::clone(&transport), target).await {
+            match connect_reconnect_target(Arc::clone(&transport), target, session_config.clone())
+                .await
+            {
                 Ok(peer) => {
                     info!(
                         device = %peer.device_name,
@@ -93,6 +131,24 @@ pub fn spawn_reconnect_driver(
             }
         }
     });
+}
+
+async fn secure_connection(
+    connection: Box<dyn Connection>,
+    session_config: Option<TrustedSessionConfig>,
+) -> Result<Box<dyn Connection>, NetworkError> {
+    match session_config {
+        Some(config) => {
+            let secure: SecureConnection = establish_trusted_session(
+                connection,
+                config.local_public_key,
+                config.trusted_peer_keys.as_ref(),
+            )
+            .await?;
+            Ok(Box::new(secure))
+        }
+        None => Ok(connection),
+    }
 }
 
 async fn hold_connection_until_closed(connection: Box<dyn Connection>) {
@@ -143,7 +199,7 @@ mod tests {
         let accept = tokio::spawn(async move { server.accept().await.unwrap() });
 
         let client: Arc<dyn Transport> = Arc::new(TcpTransport::bind(loopback()).await.unwrap());
-        let attempt = super::connect_reconnect_target(client, target(addr))
+        let attempt = super::connect_reconnect_target(client, target(addr), None)
             .await
             .unwrap();
 

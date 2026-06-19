@@ -66,6 +66,26 @@ fn pair_decodes_a_bootstrap_uri() {
 }
 
 #[test]
+fn pairing_uri_outputs_decodable_bootstrap() {
+    use nexkvm_crypto::PairingBootstrap;
+
+    let config_home = temp_config_home("pairing-uri");
+    let output = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["pairing-uri", "192.168.1.40:47654"])
+        .output()
+        .expect("run nexkvm pairing-uri");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let uri = stdout.trim();
+    let bootstrap = PairingBootstrap::from_uri(uri).expect("decodable pairing uri");
+    assert_eq!(bootstrap.addr, "192.168.1.40:47654");
+    assert!(!bootstrap.display_name.is_empty());
+    assert_eq!(bootstrap.public_key.as_bytes().len(), 32);
+}
+
+#[test]
 fn pair_accept_persists_trusted_device() {
     use nexkvm_crypto::{PairingBootstrap, PublicKey};
 
