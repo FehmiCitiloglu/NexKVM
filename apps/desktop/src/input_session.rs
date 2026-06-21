@@ -86,6 +86,7 @@ pub enum HandoffEdge {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExtendedInputShare {
     edge: HandoffEdge,
+    emergency_stop_keycode: u32,
     focus: ShareFocus,
     last_local_pos: Option<(f64, f64)>,
 }
@@ -97,9 +98,10 @@ enum ShareFocus {
 }
 
 impl ExtendedInputShare {
-    pub fn new(edge: HandoffEdge) -> Self {
+    pub fn new(edge: HandoffEdge, emergency_stop_keycode: u32) -> Self {
         Self {
             edge,
+            emergency_stop_keycode,
             focus: ShareFocus::Local,
             last_local_pos: None,
         }
@@ -134,6 +136,10 @@ impl ExtendedInputShare {
 
     fn route_remote(&mut self, event: InputEvent, pos: (f64, f64)) -> Option<InputEvent> {
         match event {
+            InputEvent::KeyPress(keycode) if keycode == self.emergency_stop_keycode => {
+                self.focus = ShareFocus::Local;
+                None
+            }
             InputEvent::RelativeMove { dx, dy } => self.advance_remote_pointer(pos, dx, dy),
             InputEvent::PointerMove { x, y } => {
                 let (last_x, last_y) = self.last_local_pos.unwrap_or((x, y));
@@ -164,6 +170,7 @@ pub async fn forward_extended_until_error<C, K, S>(
     connection: &K,
     first_id: MessageId,
     edge: HandoffEdge,
+    emergency_stop_keycode: u32,
     mut set_suppressed: S,
 ) -> Result<(), InputSessionError>
 where
@@ -172,7 +179,7 @@ where
     S: FnMut(bool),
 {
     let mut next_id = first_id;
-    let mut share = ExtendedInputShare::new(edge);
+    let mut share = ExtendedInputShare::new(edge, emergency_stop_keycode);
     loop {
         let event = capture.next_event().await?;
         let was_remote = share.is_remote();
@@ -314,7 +321,7 @@ mod tests {
 
     #[test]
     fn extended_share_stays_local_until_handoff_edge() {
-        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right, 41);
 
         assert_eq!(
             share.route(InputEvent::PointerMove { x: 0.5, y: 0.5 }),
@@ -331,7 +338,7 @@ mod tests {
 
     #[test]
     fn extended_share_enters_remote_at_configured_edge() {
-        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right, 41);
 
         assert_eq!(
             share.route(InputEvent::PointerMove { x: 1.0, y: 0.25 }),
@@ -342,7 +349,7 @@ mod tests {
 
     #[test]
     fn extended_share_forwards_keyboard_and_remote_motion() {
-        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right, 41);
         assert!(
             share
                 .route(InputEvent::PointerMove { x: 1.0, y: 0.5 })
@@ -361,7 +368,7 @@ mod tests {
 
     #[test]
     fn extended_share_returns_local_when_remote_crosses_back() {
-        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right, 41);
         assert!(
             share
                 .route(InputEvent::PointerMove { x: 1.0, y: 0.5 })
@@ -372,6 +379,20 @@ mod tests {
             share.route(InputEvent::RelativeMove { dx: -0.1, dy: 0.0 }),
             None
         );
+        assert!(!share.is_remote());
+    }
+
+    #[test]
+    fn emergency_key_returns_remote_focus_to_local_without_forwarding() {
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right, 41);
+        assert!(
+            share
+                .route(InputEvent::PointerMove { x: 1.0, y: 0.5 })
+                .is_some()
+        );
+        assert!(share.is_remote());
+
+        assert_eq!(share.route(InputEvent::KeyPress(41)), None);
         assert!(!share.is_remote());
     }
 

@@ -244,7 +244,7 @@ planned.
   MVP keyboard keys.
 - [x] Edge-based extended-screen input handoff that keeps input local until the
   configured edge is crossed.
-- [x] macOS source-side input suppression while remote focus is active.
+- [ ] macOS source-side input suppression while remote focus is active.
 - [x] macOS native input injection posting for absolute pointer, buttons,
   scroll, and MVP keyboard keys.
 - [x] Windows platform backend skeleton.

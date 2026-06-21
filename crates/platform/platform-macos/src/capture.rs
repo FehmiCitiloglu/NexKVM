@@ -233,7 +233,7 @@ type CGEventTapCallBack =
 
 const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
+const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
 const K_CG_EVENT_FIELD_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_MOUSE_EVENT_DELTA_X: u32 = 4;
 const K_CG_MOUSE_EVENT_DELTA_Y: u32 = 5;
@@ -302,7 +302,7 @@ fn run_event_tap(state: CaptureCallbackState) {
         CGEventTapCreate(
             K_CG_SESSION_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_DEFAULT,
+            K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
             mask,
             capture_callback,
             user_info,
@@ -347,9 +347,6 @@ extern "C" fn capture_callback(
     let suppressed = state.suppressed.load(Ordering::SeqCst);
     if let Some(input_event) = plan_capture_event_with_mode(captured, suppressed) {
         let _ = state.sender.send(input_event);
-        if suppressed {
-            return ptr::null_mut();
-        }
     }
     event
 }
