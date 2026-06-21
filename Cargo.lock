@@ -860,6 +860,8 @@ dependencies = [
  "async-trait",
  "nexkvm-core",
  "nexkvm-input",
+ "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

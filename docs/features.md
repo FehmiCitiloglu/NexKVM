@@ -252,6 +252,10 @@ planned.
 - [x] macOS injection translation helper model.
 - [x] Linux injection translation helper model.
 - [x] Windows injection translation helper model.
+- [x] Windows low-level hook input capture loop for pointer, buttons, scroll,
+  and MVP keyboard keys.
+- [x] Windows native input injection via `SendInput` for pointer, buttons,
+  scroll, and MVP keyboard keys.
 
 ## Planned Features
 
@@ -264,8 +268,6 @@ planned.
 - [ ] Linux PipeWire screen capture.
 - [ ] Linux PipeWire audio routing backend.
 - [ ] Linux X11 input and clipboard fallback implementation.
-- [ ] Windows input capture via Raw Input or low-level hooks.
-- [ ] Windows input injection via `SendInput`.
 - [ ] Windows clipboard backend.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.

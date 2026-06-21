@@ -206,6 +206,7 @@ pub fn format_native_integrations(report: &NativeIntegrationReport) -> String {
 }
 
 /// Render macOS input permission details for `nexkvm doctor`.
+#[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub fn format_macos_input_report(
     accessibility: &str,

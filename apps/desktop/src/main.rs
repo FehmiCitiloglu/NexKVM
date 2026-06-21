@@ -225,7 +225,46 @@ fn input_peer_handler(
         });
         Some(handler)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let _ = permissions_ready;
+        let injector = if plan.start_inject_receiver {
+            Some(nexkvm_platform_windows::WindowsInputInjector::new())
+        } else {
+            None
+        };
+        let capture = if plan.start_capture_forwarder {
+            Some(nexkvm_platform_windows::WindowsInputCapture::new())
+        } else {
+            None
+        };
+        let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
+            let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
+            if let Some(injector) = injector.clone() {
+                let connection = Arc::clone(&connection);
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        input_session::inject_until_closed(&*connection, &injector).await
+                    {
+                        tracing::warn!(%error, "Windows input injection session ended");
+                    }
+                });
+            }
+            if let Some(capture) = capture.clone() {
+                let connection = Arc::clone(&connection);
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        input_session::forward_until_error(&capture, &*connection, MessageId(0))
+                            .await
+                    {
+                        tracing::warn!(%error, "Windows input capture forwarding ended");
+                    }
+                });
+            }
+        });
+        Some(handler)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = permissions_ready;
         None
