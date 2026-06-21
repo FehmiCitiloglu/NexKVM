@@ -135,6 +135,9 @@ pub struct InputConfig {
     pub handoff_edge: InputHandoffEdge,
     /// HID usage id for the emergency stop key. Default 41 is Escape.
     pub emergency_stop_keycode: u32,
+    /// Remote focus is released after this many milliseconds without captured
+    /// input. Set to 0 to disable the timeout.
+    pub remote_focus_timeout_millis: u64,
 }
 
 impl Default for InputConfig {
@@ -144,6 +147,7 @@ impl Default for InputConfig {
             active_peer: None,
             handoff_edge: InputHandoffEdge::Right,
             emergency_stop_keycode: 41,
+            remote_focus_timeout_millis: 3_000,
         }
     }
 }
@@ -346,6 +350,7 @@ control_role = "source"
 active_peer = "studio-mac"
 handoff_edge = "right"
 emergency_stop_keycode = 41
+remote_focus_timeout_millis = 3000
 "#;
 
         let parsed: Config = toml::from_str(text).unwrap();
@@ -354,6 +359,7 @@ emergency_stop_keycode = 41
         assert_eq!(parsed.input.active_peer.as_deref(), Some("studio-mac"));
         assert_eq!(parsed.input.handoff_edge, InputHandoffEdge::Right);
         assert_eq!(parsed.input.emergency_stop_keycode, 41);
+        assert_eq!(parsed.input.remote_focus_timeout_millis, 3_000);
 
         let rendered = toml::to_string_pretty(&parsed).unwrap();
         assert!(rendered.contains("[input]"));

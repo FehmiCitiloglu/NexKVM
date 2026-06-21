@@ -111,6 +111,13 @@ impl ExtendedInputShare {
         matches!(self.focus, ShareFocus::Remote { .. })
     }
 
+    pub fn release_remote(&mut self) -> bool {
+        let was_remote = self.is_remote();
+        self.focus = ShareFocus::Local;
+        self.last_local_pos = None;
+        was_remote
+    }
+
     pub fn route(&mut self, event: InputEvent) -> Option<InputEvent> {
         match self.focus {
             ShareFocus::Local => self.route_local(event),
@@ -137,7 +144,7 @@ impl ExtendedInputShare {
     fn route_remote(&mut self, event: InputEvent, pos: (f64, f64)) -> Option<InputEvent> {
         match event {
             InputEvent::KeyPress(keycode) if keycode == self.emergency_stop_keycode => {
-                self.focus = ShareFocus::Local;
+                self.release_remote();
                 None
             }
             InputEvent::RelativeMove { dx, dy } => self.advance_remote_pointer(pos, dx, dy),
@@ -171,6 +178,7 @@ pub async fn forward_extended_until_error<C, K, S>(
     first_id: MessageId,
     edge: HandoffEdge,
     emergency_stop_keycode: u32,
+    remote_focus_timeout_millis: u64,
     mut set_suppressed: S,
 ) -> Result<(), InputSessionError>
 where
@@ -181,7 +189,24 @@ where
     let mut next_id = first_id;
     let mut share = ExtendedInputShare::new(edge, emergency_stop_keycode);
     loop {
-        let event = capture.next_event().await?;
+        let event = if share.is_remote() && remote_focus_timeout_millis > 0 {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(remote_focus_timeout_millis),
+                capture.next_event(),
+            )
+            .await
+            {
+                Ok(event) => event?,
+                Err(_) => {
+                    if share.release_remote() {
+                        set_suppressed(false);
+                    }
+                    continue;
+                }
+            }
+        } else {
+            capture.next_event().await?
+        };
         let was_remote = share.is_remote();
         let routed = share.route(event);
         let is_remote = share.is_remote();
@@ -394,6 +419,20 @@ mod tests {
 
         assert_eq!(share.route(InputEvent::KeyPress(41)), None);
         assert!(!share.is_remote());
+    }
+
+    #[test]
+    fn release_remote_is_idempotent_and_returns_to_local() {
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right, 41);
+        assert!(!share.release_remote());
+        assert!(
+            share
+                .route(InputEvent::PointerMove { x: 1.0, y: 0.5 })
+                .is_some()
+        );
+        assert!(share.release_remote());
+        assert!(!share.is_remote());
+        assert!(!share.release_remote());
     }
 
     #[derive(Debug)]

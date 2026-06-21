@@ -130,6 +130,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         input_can_inject,
         input_handoff_edge,
         config.input.emergency_stop_keycode,
+        config.input.remote_focus_timeout_millis,
     );
     let trusted_peer_keys = trusted_public_keys();
     let local_identity = load_local_identity(&config_path, &config.device.name)?;
@@ -209,6 +210,7 @@ fn input_peer_handler(
     inject_ready: bool,
     handoff_edge: input_session::HandoffEdge,
     emergency_stop_keycode: u32,
+    remote_focus_timeout_millis: u64,
 ) -> Option<connection::PeerConnectionHandler> {
     if !plan.start_inject_receiver && !plan.start_capture_forwarder {
         return None;
@@ -247,6 +249,7 @@ fn input_peer_handler(
                         MessageId(0),
                         handoff_edge,
                         emergency_stop_keycode,
+                        remote_focus_timeout_millis,
                         move |suppressed| capture_for_suppression.set_suppressed(suppressed),
                     )
                     .await
@@ -292,6 +295,7 @@ fn input_peer_handler(
                         MessageId(0),
                         handoff_edge,
                         emergency_stop_keycode,
+                        remote_focus_timeout_millis,
                         |_| {},
                     )
                     .await
