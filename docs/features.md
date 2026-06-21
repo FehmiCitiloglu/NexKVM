@@ -39,6 +39,8 @@ planned.
   pairing bootstrap.
 - [x] `nexkvm pairing-uri <addr>` command for generating a testable pairing
   bootstrap URI.
+- [x] `nexkvm permissions` command for prompting/reporting required macOS
+  input permissions.
 - [x] `nexkvm simulate [toml]` basic simulation-file summary.
 - [x] `--debug` flag for raising daemon log verbosity.
 - [x] Daemon startup wiring for config loading, telemetry, device identity,
@@ -69,10 +71,12 @@ planned.
 - [x] File-backed trust store.
 - [x] User-confirmed pairing bootstrap acceptance into the persisted trust
   store.
+- [x] File-backed local private device identity seed fallback.
 - [x] Session security trait boundary.
 - [x] ChaCha20-Poly1305 AEAD session security implementation.
 - [x] Monotonic message ID and nonce-based replay-protection model.
 - [x] Trusted-peer key announcement handshake for pinned peers.
+- [x] Ed25519 private-key proof-of-possession for trusted session handshake.
 - [x] Pairing-flow integration test.
 
 ### Discovery
@@ -104,7 +108,7 @@ planned.
 - [x] Replay/authentication rejection covered in the concrete secure receive
   path.
 - [x] Daemon inbound/outbound TCP peer connections are wrapped in app-layer
-  session security after trusted-peer key handshake.
+  session security after trusted-peer signed key handshake.
 - [x] Resumable in-process session model.
 - [x] Heartbeat and liveness monitor.
 - [x] RTT and jitter tracker.
@@ -233,7 +237,11 @@ planned.
 - [x] macOS platform backend skeleton.
 - [x] macOS Accessibility permission prompt and capability refresh.
 - [x] macOS keyboard/mouse permission diagnostics in `doctor`.
+- [x] macOS first-run permission guidance with System Settings path and restart
+  instruction.
 - [x] macOS input capture and injection permission-gated runtime boundaries.
+- [x] macOS CGEventTap input capture loop for pointer, buttons, scroll, and
+  MVP keyboard keys.
 - [x] macOS native input injection posting for absolute pointer, buttons,
   scroll, and MVP keyboard keys.
 - [x] Windows platform backend skeleton.
@@ -249,8 +257,6 @@ planned.
 
 ### Native Platform Integrations
 
-- [ ] macOS input capture via native APIs.
-- [ ] macOS input injection via native APIs.
 - [ ] macOS clipboard backend using `NSPasteboard`.
 - [ ] macOS screen capture using Screen Recording APIs.
 - [ ] macOS media encoding through VideoToolbox.
@@ -267,7 +273,6 @@ planned.
 ### Networking And Sessions
 
 - [ ] Private-key-backed device identity in OS keychain.
-- [ ] Proof-of-possession pairing handshake over the network.
 - [ ] Fully authenticated reconnect path for trusted devices.
 - [ ] TCP transport hardened with TLS.
 - [ ] QUIC transport fully wired as preferred LAN path.

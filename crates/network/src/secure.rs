@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use nexkvm_crypto::{AeadSessionSecurity, CryptoError, PublicKey, SessionKeys, SessionSecurity};
+use nexkvm_crypto::{
+    AeadSessionSecurity, CryptoError, DeviceKeypair, IdentitySignature, PublicKey, SessionKeys,
+    SessionSecurity, verify_identity_signature,
+};
 use nexkvm_protocol::{Envelope, MessageId, MessageKind, PROTOCOL_VERSION};
 use sha2::{Digest, Sha256};
 
@@ -14,6 +17,7 @@ use crate::transport::{Connection, TransportKind};
 
 const TRUSTED_SESSION_SECRET_LABEL: &[u8] = b"nexkvm trusted peer session secret v1";
 const TRUSTED_SESSION_CONTEXT_LABEL: &[u8] = b"nexkvm trusted peer session context v1";
+const HANDSHAKE_CHALLENGE_LEN: usize = 32;
 
 /// Derive session security for an already-trusted peer.
 ///
@@ -57,6 +61,28 @@ pub fn trusted_peer_session_security(
     AeadSessionSecurity::new(keys)
 }
 
+/// Build the signed transcript for one side of a trusted session handshake.
+#[must_use]
+pub fn trusted_session_transcript(
+    signer: &PublicKey,
+    verifier: &PublicKey,
+    signer_challenge: [u8; HANDSHAKE_CHALLENGE_LEN],
+    verifier_challenge: [u8; HANDSHAKE_CHALLENGE_LEN],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(
+        TRUSTED_SESSION_CONTEXT_LABEL.len()
+            + signer.as_bytes().len()
+            + verifier.as_bytes().len()
+            + HANDSHAKE_CHALLENGE_LEN * 2,
+    );
+    out.extend_from_slice(TRUSTED_SESSION_CONTEXT_LABEL);
+    out.extend_from_slice(signer.as_bytes());
+    out.extend_from_slice(verifier.as_bytes());
+    out.extend_from_slice(&signer_challenge);
+    out.extend_from_slice(&verifier_challenge);
+    out
+}
+
 /// Exchange pinned public keys and wrap a trusted connection with session AEAD.
 ///
 /// The handshake is intentionally small: both sides send their local public key
@@ -69,14 +95,16 @@ pub fn trusted_peer_session_security(
 /// connection.
 pub async fn establish_trusted_session(
     inner: Box<dyn Connection>,
-    local: PublicKey,
+    local: DeviceKeypair,
+    local_challenge: [u8; HANDSHAKE_CHALLENGE_LEN],
     trusted_peers: &[PublicKey],
 ) -> Result<SecureConnection, NetworkError> {
+    let local_public_key = local.public_key();
     let local_hello = Envelope::new(
         PROTOCOL_VERSION,
         MessageId(0),
         MessageKind::Handshake,
-        Bytes::copy_from_slice(local.as_bytes()),
+        Bytes::from(encode_handshake_hello(&local_public_key, local_challenge)),
     );
     inner.send(local_hello).await?;
 
@@ -85,13 +113,73 @@ pub async fn establish_trusted_session(
         return Err(CryptoError::KeyExchange("expected trusted session handshake".into()).into());
     }
 
-    let peer = PublicKey(peer_hello.body.to_vec());
+    let (peer, peer_challenge) = decode_handshake_hello(&peer_hello.body)?;
     if !trusted_peers.iter().any(|trusted| trusted == &peer) {
         return Err(CryptoError::Untrusted.into());
     }
 
-    let security = trusted_peer_session_security(&local, &peer)?;
+    let local_transcript =
+        trusted_session_transcript(&local_public_key, &peer, local_challenge, peer_challenge);
+    let local_signature = local.sign_identity_challenge(&local_transcript);
+    let local_proof = Envelope::new(
+        PROTOCOL_VERSION,
+        MessageId(1),
+        MessageKind::Handshake,
+        Bytes::copy_from_slice(local_signature.as_bytes()),
+    );
+    inner.send(local_proof).await?;
+
+    let peer_proof = inner.recv().await?;
+    if peer_proof.kind != MessageKind::Handshake {
+        return Err(CryptoError::KeyExchange("expected trusted session proof".into()).into());
+    }
+    let peer_transcript =
+        trusted_session_transcript(&peer, &local_public_key, peer_challenge, local_challenge);
+    verify_identity_signature(
+        &peer,
+        &peer_transcript,
+        &IdentitySignature(peer_proof.body.to_vec()),
+    )?;
+
+    let security = trusted_peer_session_security(&local_public_key, &peer)?;
     Ok(SecureConnection::new(inner, Arc::new(security)))
+}
+
+fn encode_handshake_hello(
+    public_key: &PublicKey,
+    challenge: [u8; HANDSHAKE_CHALLENGE_LEN],
+) -> Vec<u8> {
+    let key = public_key.as_bytes();
+    let mut out = Vec::with_capacity(2 + key.len() + challenge.len());
+    out.extend_from_slice(&(key.len() as u16).to_be_bytes());
+    out.extend_from_slice(key);
+    out.extend_from_slice(&challenge);
+    out
+}
+
+fn decode_handshake_hello(
+    body: &[u8],
+) -> Result<(PublicKey, [u8; HANDSHAKE_CHALLENGE_LEN]), CryptoError> {
+    if body.len() < 2 + HANDSHAKE_CHALLENGE_LEN {
+        return Err(CryptoError::KeyExchange(
+            "truncated trusted session hello".into(),
+        ));
+    }
+    let key_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+    let expected = 2 + key_len + HANDSHAKE_CHALLENGE_LEN;
+    if body.len() != expected {
+        return Err(CryptoError::KeyExchange(
+            "invalid trusted session hello".into(),
+        ));
+    }
+    let key_start = 2;
+    let challenge_start = key_start + key_len;
+    let mut challenge = [0u8; HANDSHAKE_CHALLENGE_LEN];
+    challenge.copy_from_slice(&body[challenge_start..]);
+    Ok((
+        PublicKey(body[key_start..challenge_start].to_vec()),
+        challenge,
+    ))
 }
 
 /// A connection wrapper that encrypts and authenticates envelope bodies.

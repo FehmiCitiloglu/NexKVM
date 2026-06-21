@@ -28,6 +28,7 @@ fn help_lists_the_subcommands() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("nexkvm devices"));
     assert!(stdout.contains("nexkvm pair [--accept] <uri>"));
+    assert!(stdout.contains("nexkvm permissions"));
     assert!(stdout.contains("--debug"));
 }
 
@@ -83,6 +84,32 @@ fn pairing_uri_outputs_decodable_bootstrap() {
     assert_eq!(bootstrap.addr, "192.168.1.40:47654");
     assert!(!bootstrap.display_name.is_empty());
     assert_eq!(bootstrap.public_key.as_bytes().len(), 32);
+}
+
+#[test]
+fn pairing_uri_reuses_persisted_identity_key() {
+    use nexkvm_crypto::PairingBootstrap;
+
+    let config_home = temp_config_home("pairing-uri-identity");
+    let first = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["pairing-uri", "192.168.1.40:47654"])
+        .output()
+        .expect("run first nexkvm pairing-uri");
+    let second = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["pairing-uri", "192.168.1.40:47654"])
+        .output()
+        .expect("run second nexkvm pairing-uri");
+
+    assert!(first.status.success());
+    assert!(second.status.success());
+    let first = PairingBootstrap::from_uri(String::from_utf8_lossy(&first.stdout).trim())
+        .expect("first uri");
+    let second = PairingBootstrap::from_uri(String::from_utf8_lossy(&second.stdout).trim())
+        .expect("second uri");
+
+    assert_eq!(first.public_key, second.public_key);
 }
 
 #[test]

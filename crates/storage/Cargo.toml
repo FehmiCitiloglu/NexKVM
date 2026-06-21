@@ -15,8 +15,10 @@ workspace = true
 nexkvm-core.workspace = true
 nexkvm-crypto.workspace = true
 nexkvm-telemetry.workspace = true
+getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 toml.workspace = true
 thiserror.workspace = true
 

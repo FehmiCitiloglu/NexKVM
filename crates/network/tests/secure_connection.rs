@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use nexkvm_crypto::{AeadSessionSecurity, CryptoError, PublicKey, SessionKeys};
+use nexkvm_crypto::{
+    AeadSessionSecurity, CryptoError, DeviceKeypair, IdentitySignature, PublicKey, SessionKeys,
+};
 use nexkvm_network::{
     Connection, NetworkError, SecureConnection, TransportKind, establish_trusted_session,
     trusted_peer_session_security,
@@ -32,29 +34,55 @@ fn input_envelope(id: u64, body: &'static [u8]) -> Envelope {
     )
 }
 
-fn handshake_envelope(key: &PublicKey) -> Envelope {
+fn handshake_envelope(key: &PublicKey, challenge: [u8; 32]) -> Envelope {
+    let mut body = Vec::with_capacity(2 + key.as_bytes().len() + challenge.len());
+    body.extend_from_slice(&(key.as_bytes().len() as u16).to_be_bytes());
+    body.extend_from_slice(key.as_bytes());
+    body.extend_from_slice(&challenge);
     Envelope::new(
         PROTOCOL_VERSION,
         MessageId(0),
         MessageKind::Handshake,
-        Bytes::copy_from_slice(key.as_bytes()),
+        Bytes::from(body),
+    )
+}
+
+fn proof_envelope(signature: &IdentitySignature) -> Envelope {
+    Envelope::new(
+        PROTOCOL_VERSION,
+        MessageId(1),
+        MessageKind::Handshake,
+        Bytes::copy_from_slice(signature.as_bytes()),
     )
 }
 
 #[tokio::test]
 async fn establish_trusted_session_announces_key_and_wraps_connection() {
-    let local = PublicKey(vec![1; 32]);
-    let peer = PublicKey(vec![2; 32]);
+    let local = DeviceKeypair::from_seed([1u8; 32]);
+    let peer = DeviceKeypair::from_seed([2u8; 32]);
+    let local_challenge = [3u8; 32];
+    let peer_challenge = [4u8; 32];
+    let peer_signature = peer.sign_identity_challenge(&nexkvm_network::trusted_session_transcript(
+        &peer.public_key(),
+        &local.public_key(),
+        peer_challenge,
+        local_challenge,
+    ));
     let raw = Arc::new(MockConnection::default());
     raw.inbound
         .lock()
         .expect("inbound")
-        .push_back(handshake_envelope(&peer));
+        .push_back(handshake_envelope(&peer.public_key(), peer_challenge));
+    raw.inbound
+        .lock()
+        .expect("inbound")
+        .push_back(proof_envelope(&peer_signature));
 
     let secure = establish_trusted_session(
         Box::new(ArcConnection(raw.clone())),
         local.clone(),
-        std::slice::from_ref(&peer),
+        local_challenge,
+        std::slice::from_ref(&peer.public_key()),
     )
     .await
     .expect("trusted session");
@@ -66,7 +94,20 @@ async fn establish_trusted_session_announces_key_and_wraps_connection() {
         .pop_front()
         .expect("local handshake");
     assert_eq!(announced.kind, MessageKind::Handshake);
-    assert_eq!(announced.body, Bytes::copy_from_slice(local.as_bytes()));
+    assert!(
+        announced
+            .body
+            .windows(32)
+            .any(|window| window == local.public_key().as_bytes())
+    );
+    let proof = raw
+        .sent
+        .lock()
+        .expect("sent")
+        .pop_front()
+        .expect("local proof");
+    assert_eq!(proof.kind, MessageKind::Handshake);
+    assert_ne!(proof.body, Bytes::new());
 
     secure
         .send(input_envelope(11, b"secure after handshake"))
@@ -84,21 +125,53 @@ async fn establish_trusted_session_announces_key_and_wraps_connection() {
 
 #[tokio::test]
 async fn establish_trusted_session_rejects_untrusted_peer_key() {
-    let local = PublicKey(vec![1; 32]);
-    let peer = PublicKey(vec![2; 32]);
+    let local = DeviceKeypair::from_seed([1u8; 32]);
+    let peer = DeviceKeypair::from_seed([2u8; 32]);
     let raw = Arc::new(MockConnection::default());
     raw.inbound
         .lock()
         .expect("inbound")
-        .push_back(handshake_envelope(&peer));
+        .push_back(handshake_envelope(&peer.public_key(), [4u8; 32]));
 
-    let error = establish_trusted_session(Box::new(ArcConnection(raw)), local, &[])
+    let error = establish_trusted_session(Box::new(ArcConnection(raw)), local, [3u8; 32], &[])
         .await
         .expect_err("untrusted peer must fail");
 
     assert!(matches!(
         error,
         NetworkError::Crypto(CryptoError::Untrusted)
+    ));
+}
+
+#[tokio::test]
+async fn establish_trusted_session_rejects_bad_identity_signature() {
+    let local = DeviceKeypair::from_seed([1u8; 32]);
+    let peer = DeviceKeypair::from_seed([2u8; 32]);
+    let attacker = DeviceKeypair::from_seed([9u8; 32]);
+    let raw = Arc::new(MockConnection::default());
+    raw.inbound
+        .lock()
+        .expect("inbound")
+        .push_back(handshake_envelope(&peer.public_key(), [4u8; 32]));
+    raw.inbound
+        .lock()
+        .expect("inbound")
+        .push_back(proof_envelope(
+            &attacker.sign_identity_challenge(b"wrong transcript"),
+        ));
+
+    let error = establish_trusted_session(
+        Box::new(ArcConnection(raw)),
+        local,
+        [3u8; 32],
+        std::slice::from_ref(&peer.public_key()),
+    )
+    .await
+    .expect_err("bad proof must fail");
+
+    assert!(matches!(
+        error,
+        NetworkError::Crypto(CryptoError::BadSignature)
     ));
 }
 

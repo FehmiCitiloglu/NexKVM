@@ -17,6 +17,8 @@ pub enum Command {
     Run,
     /// Print local platform/config diagnostics.
     Doctor,
+    /// Prompt/report platform permissions needed by native integrations.
+    Permissions,
     /// Print protocol compatibility info.
     Protocol,
     /// Print the resolved config path.
@@ -81,6 +83,7 @@ where
     let command = match it.next().as_deref() {
         None => Command::Run,
         Some("doctor") => Command::Doctor,
+        Some("permissions") => Command::Permissions,
         Some("protocol") => Command::Protocol,
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
@@ -131,6 +134,7 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm devices             List trusted (paired) devices\n");
     out.push_str("  nexkvm pair [--accept] <uri> Decode or accept a pairing bootstrap\n");
     out.push_str("  nexkvm pairing-uri <addr>  Print this device's pairing bootstrap URI\n");
+    out.push_str("  nexkvm permissions         Request/report required macOS permissions\n");
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
@@ -213,8 +217,18 @@ pub fn format_macos_input_report(
     let _ = writeln!(out, "macOS input accessibility: {accessibility}");
     let _ = writeln!(out, "  capture ready: {can_capture_input}");
     let _ = writeln!(out, "  inject ready: {can_inject_input}");
+    let _ = writeln!(
+        out,
+        "  settings: System Settings > Privacy & Security > Accessibility"
+    );
     if let Some(next_step) = next_step {
         let _ = writeln!(out, "  next step: {next_step}");
+    }
+    if !can_capture_input || !can_inject_input {
+        let _ = writeln!(
+            out,
+            "  after granting permission: restart nexkvm after granting permission"
+        );
     }
     out.truncate(out.trim_end().len());
     out
@@ -293,6 +307,15 @@ mod tests {
     #[test]
     fn unknown_command_is_rejected() {
         assert!(parse(["frobnicate"]).is_err());
+    }
+
+    #[test]
+    fn permissions_command_is_parsed() {
+        assert_eq!(
+            parse(["permissions"]).unwrap().command,
+            Command::Permissions
+        );
+        assert!(help_text().contains("nexkvm permissions"));
     }
 
     #[test]
@@ -396,5 +419,7 @@ mod tests {
         assert!(rendered.contains("capture ready: false"));
         assert!(rendered.contains("inject ready: false"));
         assert!(rendered.contains("Grant Accessibility permission"));
+        assert!(rendered.contains("System Settings"));
+        assert!(rendered.contains("restart nexkvm after granting permission"));
     }
 }

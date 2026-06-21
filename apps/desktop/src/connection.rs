@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use nexkvm_core::identity::DeviceId;
-use nexkvm_crypto::PublicKey;
+use nexkvm_crypto::{DeviceKeypair, PublicKey};
 use nexkvm_discovery::{DiscoveryService, ReconnectTarget};
 use nexkvm_network::{
     Connection, NetworkError, SecureConnection, Transport, TransportKind, establish_trusted_session,
@@ -15,14 +15,20 @@ pub type PeerConnectionHandler = Arc<dyn Fn(Box<dyn Connection>) + Send + Sync>;
 /// Trusted-session material used to secure raw transport connections.
 #[derive(Debug, Clone)]
 pub struct TrustedSessionConfig {
-    local_public_key: PublicKey,
+    local_identity: DeviceKeypair,
+    local_challenge: [u8; 32],
     trusted_peer_keys: Arc<Vec<PublicKey>>,
 }
 
 impl TrustedSessionConfig {
-    pub fn new(local_public_key: PublicKey, trusted_peer_keys: Vec<PublicKey>) -> Self {
+    pub fn new(
+        local_identity: DeviceKeypair,
+        local_challenge: [u8; 32],
+        trusted_peer_keys: Vec<PublicKey>,
+    ) -> Self {
         Self {
-            local_public_key,
+            local_identity,
+            local_challenge,
             trusted_peer_keys: Arc::new(trusted_peer_keys),
         }
     }
@@ -141,7 +147,8 @@ async fn secure_connection(
         Some(config) => {
             let secure: SecureConnection = establish_trusted_session(
                 connection,
-                config.local_public_key,
+                config.local_identity,
+                config.local_challenge,
                 config.trusted_peer_keys.as_ref(),
             )
             .await?;

@@ -9,7 +9,7 @@ use anyhow::Context;
 use nexkvm_core::platform::PlatformBackend;
 use nexkvm_core::{DeviceInfo, EventBus, NativeIntegrationReport};
 use nexkvm_network::Transport;
-use nexkvm_protocol::{PROTOCOL_VERSION, VersionRange};
+use nexkvm_protocol::{MessageId, PROTOCOL_VERSION, VersionRange};
 use nexkvm_storage::{Config, current_os};
 use nexkvm_telemetry::LogLevel;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
     match invocation.command {
         Command::Run => return run_daemon(invocation.debug).await,
         Command::Doctor => return doctor(),
+        Command::Permissions => return permissions().await,
         Command::Protocol => return protocol_info(),
         Command::ConfigPath => {
             println!("{}", config_path().display());
@@ -113,8 +114,10 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     );
     let input_peer_handler = input_peer_handler(input_plan, input_permissions_ready);
     let trusted_peer_keys = trusted_public_keys();
+    let local_identity = load_local_identity(&config_path, &config.device.name)?;
     let session_config = connection::TrustedSessionConfig::new(
-        nexkvm_crypto::PublicKey(local_public_key(&config_path, &config.device.name)),
+        local_identity,
+        local_handshake_challenge(&config.device.name),
         trusted_peer_keys,
     );
 
@@ -177,21 +180,48 @@ fn input_peer_handler(
     plan: input_session::InputRuntimePlan,
     permissions_ready: bool,
 ) -> Option<connection::PeerConnectionHandler> {
-    if !plan.start_inject_receiver {
+    if !plan.start_inject_receiver && !plan.start_capture_forwarder {
         return None;
     }
     #[cfg(target_os = "macos")]
     {
-        let injector = nexkvm_platform_macos::MacosInputInjector::new(permissions_ready);
+        let injector = if plan.start_inject_receiver {
+            Some(nexkvm_platform_macos::MacosInputInjector::new(
+                permissions_ready,
+            ))
+        } else {
+            None
+        };
+        let capture = if plan.start_capture_forwarder {
+            Some(nexkvm_platform_macos::MacosInputCapture::new(
+                permissions_ready,
+            ))
+        } else {
+            None
+        };
         let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
-            let injector = injector.clone();
-            tokio::spawn(async move {
-                if let Err(error) =
-                    input_session::inject_until_closed(&*connection, &injector).await
-                {
-                    tracing::warn!(%error, "input injection session ended");
-                }
-            });
+            let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
+            if let Some(injector) = injector.clone() {
+                let connection = Arc::clone(&connection);
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        input_session::inject_until_closed(&*connection, &injector).await
+                    {
+                        tracing::warn!(%error, "input injection session ended");
+                    }
+                });
+            }
+            if let Some(capture) = capture.clone() {
+                let connection = Arc::clone(&connection);
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        input_session::forward_until_error(&capture, &*connection, MessageId(0))
+                            .await
+                    {
+                        tracing::warn!(%error, "input capture forwarding ended");
+                    }
+                });
+            }
         });
         Some(handler)
     }
@@ -321,7 +351,7 @@ fn pair(uri: &str, accept: bool) -> anyhow::Result<()> {
 
 /// Generate this device's pairing bootstrap URI.
 fn pairing_uri(addr: &str) -> anyhow::Result<()> {
-    use nexkvm_crypto::{PairingBootstrap, PublicKey};
+    use nexkvm_crypto::PairingBootstrap;
     use sha2::{Digest, Sha256};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -329,7 +359,7 @@ fn pairing_uri(addr: &str) -> anyhow::Result<()> {
     let config = Config::load(&config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
 
-    let public_key = PublicKey(local_public_key(&config_path, &config.device.name));
+    let public_key = load_local_identity(&config_path, &config.device.name)?.public_key();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before Unix epoch")?
@@ -348,14 +378,34 @@ fn pairing_uri(addr: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn local_public_key(config_path: &std::path::Path, device_name: &str) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
+fn load_local_identity(
+    config_path: &std::path::Path,
+    device_name: &str,
+) -> anyhow::Result<nexkvm_crypto::DeviceKeypair> {
+    use nexkvm_storage::FileDeviceIdentityStore;
 
+    let path = identity_path_for(config_path);
+    FileDeviceIdentityStore::new(&path)
+        .load_or_create(device_name)
+        .with_context(|| format!("loading local identity from {}", path.display()))
+}
+
+fn local_handshake_challenge(device_name: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
     let mut hasher = Sha256::new();
-    hasher.update(b"nexkvm local public identity placeholder v1");
-    hasher.update(config_path.to_string_lossy().as_bytes());
+    hasher.update(b"nexkvm trusted session challenge v1");
     hasher.update(device_name.as_bytes());
-    hasher.finalize().to_vec()
+    hasher.update(now.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut challenge = [0u8; 32];
+    challenge.copy_from_slice(&digest);
+    challenge
 }
 
 fn doctor() -> anyhow::Result<()> {
@@ -412,6 +462,37 @@ fn doctor() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn permissions() -> anyhow::Result<()> {
+    println!("nexkvm permissions");
+    #[cfg(target_os = "macos")]
+    {
+        let backend = nexkvm_platform_macos::MacosBackend::new();
+        let _ = backend.request_permissions().await;
+        let report = backend.input_permission_report();
+        let accessibility = match report.accessibility {
+            nexkvm_platform_macos::MacosPermissionState::Ready => "ready",
+            nexkvm_platform_macos::MacosPermissionState::PermissionRequired => {
+                "permission-required"
+            }
+        };
+        for line in cli::format_macos_input_report(
+            accessibility,
+            report.can_capture_input,
+            report.can_inject_input,
+            report.next_step,
+        )
+        .lines()
+        {
+            println!("  {line}");
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        println!("  no interactive permission prompt is available on this platform yet");
+    }
+    Ok(())
+}
+
 fn protocol_info() -> anyhow::Result<()> {
     println!("protocol: {PROTOCOL_VERSION}");
     println!("supported: {}", VersionRange::current());
@@ -459,6 +540,13 @@ fn trust_path() -> std::path::PathBuf {
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("trust.json")
+}
+
+fn identity_path_for(config_path: &std::path::Path) -> std::path::PathBuf {
+    config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("identity.json")
 }
 
 fn trusted_public_keys() -> Vec<nexkvm_crypto::PublicKey> {

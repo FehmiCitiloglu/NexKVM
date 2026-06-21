@@ -2,6 +2,20 @@
 
 ## Permission Smoke
 
+First run the interactive permission helper:
+
+```sh
+cargo run -p nexkvm -- permissions
+```
+
+Expected before Accessibility is granted:
+
+- macOS may open the Accessibility permission prompt.
+- The output includes `macOS input accessibility: permission-required`.
+- The output includes `System Settings > Privacy & Security > Accessibility`.
+- After granting permission, quit and restart `nexkvm`; macOS usually does not
+  apply Accessibility trust to an already-running process.
+
 Run:
 
 ```sh
@@ -19,6 +33,7 @@ Expected before Accessibility is granted:
 - `macOS input accessibility: permission-required`
 - `capture ready: false`
 - `inject ready: false`
+- `after granting permission: restart nexkvm after granting permission`
 
 ## Release Signing Smoke
 
@@ -43,3 +58,5 @@ Expected:
 - `codesign` shows Developer ID signing and hardened runtime.
 - `stapler validate` succeeds.
 - `spctl` reports accepted source for the app bundle.
+- If any validation fails, do not publish the archive; fix signing/notarization
+  first so users do not see a Gatekeeper "unidentified developer" flow.

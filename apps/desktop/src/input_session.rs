@@ -57,6 +57,23 @@ where
     Ok(next_id)
 }
 
+pub async fn forward_until_error<C, K>(
+    capture: &C,
+    connection: &K,
+    first_id: MessageId,
+) -> Result<(), InputSessionError>
+where
+    C: InputCapture + ?Sized,
+    K: Connection + ?Sized,
+{
+    let mut next_id = first_id;
+    loop {
+        let event = capture.next_event().await?;
+        connection.send(encode_input_event(next_id, event)).await?;
+        next_id = next_id.next();
+    }
+}
+
 pub async fn inject_until_closed<K, I>(
     connection: &K,
     injector: &I,
@@ -259,6 +276,25 @@ mod tests {
             decode_input_event(sent[1].clone()).unwrap(),
             InputEvent::KeyRelease(0x04)
         );
+    }
+
+    #[tokio::test]
+    async fn forward_until_error_sends_until_capture_stops() {
+        let capture = QueueCapture::new(vec![
+            InputEvent::KeyPress(0x04),
+            InputEvent::KeyRelease(0x04),
+        ]);
+        let connection = Arc::new(MemoryConnection::default());
+
+        let error = forward_until_error(&capture, &*connection, MessageId(20))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, InputSessionError::Codec(_)));
+        let sent = connection.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].id, MessageId(20));
+        assert_eq!(sent[1].id, MessageId(21));
     }
 
     #[tokio::test]

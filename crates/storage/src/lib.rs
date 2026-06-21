@@ -22,8 +22,10 @@ use nexkvm_telemetry::TelemetryConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod identity;
 mod trust;
 
+pub use identity::{FileDeviceIdentityStore, IdentityStoreError};
 pub use trust::{FileTrustStore, TrustStoreError};
 
 /// Errors loading or saving configuration.
