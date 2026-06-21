@@ -171,8 +171,16 @@ impl Drop for UdpDiscovery {
 
 #[async_trait]
 impl Discovery for UdpDiscovery {
-    async fn advertise(&self, info: &DeviceInfo, addr: SocketAddr) -> Result<(), DiscoveryError> {
-        let ann = ServiceAnnouncement::new(info.clone(), addr.port(), 1);
+    async fn advertise(
+        &self,
+        info: &DeviceInfo,
+        addr: SocketAddr,
+        fingerprint: Option<&str>,
+    ) -> Result<(), DiscoveryError> {
+        let mut ann = ServiceAnnouncement::new(info.clone(), addr.port(), 1);
+        if let Some(fingerprint) = fingerprint {
+            ann = ann.with_fingerprint(fingerprint);
+        }
         let start_loop = {
             let mut guard = self.announcement.lock().expect("ann mutex poisoned");
             let first = guard.is_none();

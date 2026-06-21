@@ -98,8 +98,16 @@ impl Drop for MdnsDiscovery {
 
 #[async_trait]
 impl Discovery for MdnsDiscovery {
-    async fn advertise(&self, info: &DeviceInfo, addr: SocketAddr) -> Result<(), DiscoveryError> {
-        let announcement = ServiceAnnouncement::new(info.clone(), addr.port(), 1);
+    async fn advertise(
+        &self,
+        info: &DeviceInfo,
+        addr: SocketAddr,
+        fingerprint: Option<&str>,
+    ) -> Result<(), DiscoveryError> {
+        let mut announcement = ServiceAnnouncement::new(info.clone(), addr.port(), 1);
+        if let Some(fingerprint) = fingerprint {
+            announcement = announcement.with_fingerprint(fingerprint);
+        }
         let instance = info.id.to_string();
         // Hostname must end in ".local."; the daemon resolves addresses itself
         // when we pass an empty IP set and `addr.ip()`.

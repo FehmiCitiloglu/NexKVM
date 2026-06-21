@@ -121,6 +121,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     let input_peer_handler = input_peer_handler(input_plan, input_permissions_ready);
     let trusted_peer_keys = trusted_public_keys();
     let local_identity = load_local_identity(&config_path, &config.device.name)?;
+    let local_fingerprint = local_identity.public_key().fingerprint();
     let session_config = connection::TrustedSessionConfig::new(
         local_identity,
         local_handshake_challenge(&config.device.name),
@@ -151,7 +152,14 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     // 7. LAN discovery: advertise this device and auto-reconnect trusted peers.
     //    Kept alive for the daemon's lifetime; dropping it aborts its tasks.
     let _discovery = if config.network.enable_discovery {
-        match start_discovery(&device, &config, &config_path, transport, session_config) {
+        match start_discovery(
+            &device,
+            &config,
+            &config_path,
+            transport,
+            session_config,
+            local_fingerprint,
+        ) {
             Ok(service) => Some(service),
             Err(e) => {
                 tracing::warn!(error = %e, "LAN discovery disabled (startup failed)");
@@ -286,6 +294,7 @@ fn start_discovery(
     config_path: &std::path::Path,
     transport: Option<Arc<dyn Transport>>,
     session_config: connection::TrustedSessionConfig,
+    local_fingerprint: String,
 ) -> anyhow::Result<std::sync::Arc<nexkvm_discovery::DiscoveryService>> {
     use nexkvm_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
     use nexkvm_storage::FileTrustStore;
@@ -317,7 +326,10 @@ fn start_discovery(
     let driver = Arc::clone(&service);
     let info = device.clone();
     tokio::spawn(async move {
-        let mut targets = match driver.start(&info, listen_addr).await {
+        let mut targets = match driver
+            .start(&info, listen_addr, Some(&local_fingerprint))
+            .await
+        {
             Ok(rx) => rx,
             Err(e) => {
                 tracing::error!(error = %e, "failed to start discovery advertising");
