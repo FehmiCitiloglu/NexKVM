@@ -142,7 +142,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
             let transport: Arc<dyn Transport> = Arc::new(tcp);
             connection::spawn_inbound_accept_loop(
                 Arc::clone(&transport),
-                input_peer_handler,
+                input_peer_handler.clone(),
                 Some(session_config.clone()),
             );
             info!(addr = %local_addr, "TCP transport listening");
@@ -164,6 +164,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
             transport,
             session_config,
             local_fingerprint,
+            input_peer_handler.clone(),
         ) {
             Ok(service) => Some(service),
             Err(e) => {
@@ -310,6 +311,7 @@ fn start_discovery(
     transport: Option<Arc<dyn Transport>>,
     session_config: connection::TrustedSessionConfig,
     local_fingerprint: String,
+    input_peer_handler: Option<connection::PeerConnectionHandler>,
 ) -> anyhow::Result<std::sync::Arc<nexkvm_discovery::DiscoveryService>> {
     use nexkvm_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
     use nexkvm_storage::FileTrustStore;
@@ -358,6 +360,7 @@ fn start_discovery(
                 transport,
                 targets,
                 Some(session_config),
+                input_peer_handler,
             );
         } else {
             while let Some(target) = targets.recv().await {

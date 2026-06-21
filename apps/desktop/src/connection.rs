@@ -41,7 +41,7 @@ pub struct ConnectedPeer {
     pub device_name: String,
     pub addr: SocketAddr,
     pub transport: TransportKind,
-    _connection: Box<dyn Connection>,
+    pub connection: Box<dyn Connection>,
 }
 
 /// Dial one trusted rediscovery target over the configured transport.
@@ -57,7 +57,7 @@ pub async fn connect_reconnect_target(
         device_name: target.device.info.name,
         addr,
         transport: connection.kind(),
-        _connection: connection,
+        connection,
     })
 }
 
@@ -121,6 +121,7 @@ pub fn spawn_reconnect_driver(
     transport: Arc<dyn Transport>,
     mut targets: mpsc::Receiver<ReconnectTarget>,
     session_config: Option<TrustedSessionConfig>,
+    handler: Option<PeerConnectionHandler>,
 ) {
     tokio::spawn(async move {
         while let Some(target) = targets.recv().await {
@@ -138,9 +139,13 @@ pub fn spawn_reconnect_driver(
                         "trusted peer connected"
                     );
                     service.report_success(peer.device_id);
-                    tokio::spawn(async move {
-                        hold_connection_until_closed(peer._connection).await;
-                    });
+                    if let Some(handler) = &handler {
+                        handler(peer.connection);
+                    } else {
+                        tokio::spawn(async move {
+                            hold_connection_until_closed(peer.connection).await;
+                        });
+                    }
                 }
                 Err(error) => {
                     warn!(%device_id, attempt, %error, "trusted peer reconnect failed");
