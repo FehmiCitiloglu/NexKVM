@@ -110,29 +110,27 @@ pub struct InputRuntimePlan {
     pub start_inject_receiver: bool,
 }
 
-pub fn plan_runtime(role: InputRuntimeRole, permissions_ready: bool) -> InputRuntimePlan {
-    if !permissions_ready {
-        return InputRuntimePlan {
-            start_capture_forwarder: false,
-            start_inject_receiver: false,
-        };
-    }
+pub fn plan_runtime(
+    role: InputRuntimeRole,
+    can_capture_input: bool,
+    can_inject_input: bool,
+) -> InputRuntimePlan {
     match role {
         InputRuntimeRole::Disabled => InputRuntimePlan {
             start_capture_forwarder: false,
             start_inject_receiver: false,
         },
         InputRuntimeRole::Source => InputRuntimePlan {
-            start_capture_forwarder: true,
+            start_capture_forwarder: can_capture_input,
             start_inject_receiver: false,
         },
         InputRuntimeRole::Target => InputRuntimePlan {
             start_capture_forwarder: false,
-            start_inject_receiver: true,
+            start_inject_receiver: can_inject_input,
         },
         InputRuntimeRole::Both => InputRuntimePlan {
-            start_capture_forwarder: true,
-            start_inject_receiver: true,
+            start_capture_forwarder: can_capture_input,
+            start_inject_receiver: can_inject_input,
         },
     }
 }
@@ -323,16 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn target_role_starts_receiver_only_when_permissions_are_ready() {
+    fn target_role_starts_receiver_only_when_inject_is_ready() {
         assert_eq!(
-            plan_runtime(InputRuntimeRole::Target, true),
+            plan_runtime(InputRuntimeRole::Target, false, true),
             InputRuntimePlan {
                 start_capture_forwarder: false,
                 start_inject_receiver: true,
             }
         );
         assert_eq!(
-            plan_runtime(InputRuntimeRole::Target, false),
+            plan_runtime(InputRuntimeRole::Target, true, false),
             InputRuntimePlan {
                 start_capture_forwarder: false,
                 start_inject_receiver: false,
@@ -341,12 +339,37 @@ mod tests {
     }
 
     #[test]
-    fn source_role_starts_capture_only_when_permissions_are_ready() {
+    fn source_role_starts_capture_only_when_capture_is_ready() {
         assert_eq!(
-            plan_runtime(InputRuntimeRole::Source, true),
+            plan_runtime(InputRuntimeRole::Source, true, false),
             InputRuntimePlan {
                 start_capture_forwarder: true,
                 start_inject_receiver: false,
+            }
+        );
+        assert_eq!(
+            plan_runtime(InputRuntimeRole::Source, false, true),
+            InputRuntimePlan {
+                start_capture_forwarder: false,
+                start_inject_receiver: false,
+            }
+        );
+    }
+
+    #[test]
+    fn both_role_enables_each_direction_independently() {
+        assert_eq!(
+            plan_runtime(InputRuntimeRole::Both, true, false),
+            InputRuntimePlan {
+                start_capture_forwarder: true,
+                start_inject_receiver: false,
+            }
+        );
+        assert_eq!(
+            plan_runtime(InputRuntimeRole::Both, false, true),
+            InputRuntimePlan {
+                start_capture_forwarder: false,
+                start_inject_receiver: true,
             }
         );
     }

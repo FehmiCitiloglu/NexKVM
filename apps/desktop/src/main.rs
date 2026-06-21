@@ -97,20 +97,25 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
 
     let input_role = input_runtime_role(config.input.control_role);
     #[cfg(target_os = "macos")]
-    let input_permissions_ready = {
+    let (input_can_capture, input_can_inject) = {
         let macos = nexkvm_platform_macos::MacosBackend::new();
         let report = macos.input_permission_report();
-        report.can_capture_input && report.can_inject_input
+        (report.can_capture_input, report.can_inject_input)
     };
     #[cfg(not(target_os = "macos"))]
-    let input_permissions_ready = backend
+    let (input_can_capture, input_can_inject) = backend
         .as_ref()
         .map(|backend| {
             let caps = backend.capabilities();
-            caps.can_capture_input && caps.can_inject_input && !caps.permission_pending
+            (
+                caps.can_capture_input && !caps.permission_pending,
+                caps.can_inject_input && !caps.permission_pending,
+            )
         })
-        .unwrap_or(false);
-    let input_plan = input_session::plan_runtime(input_role, input_permissions_ready);
+        .unwrap_or((false, false));
+    let input_plan = input_session::plan_runtime(input_role, input_can_capture, input_can_inject);
+    let input_permissions_ready =
+        input_permissions_ready(input_role, input_can_capture, input_can_inject);
     info!(
         role = ?input_role,
         permissions_ready = input_permissions_ready,
@@ -118,7 +123,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         inject = input_plan.start_inject_receiver,
         "input runtime plan"
     );
-    let input_peer_handler = input_peer_handler(input_plan, input_permissions_ready);
+    let input_peer_handler = input_peer_handler(input_plan, input_can_capture, input_can_inject);
     let trusted_peer_keys = trusted_public_keys();
     let local_identity = load_local_identity(&config_path, &config.device.name)?;
     let local_fingerprint = local_identity.public_key().fingerprint();
@@ -192,7 +197,8 @@ fn input_runtime_role(role: nexkvm_storage::InputControlRole) -> input_session::
 
 fn input_peer_handler(
     plan: input_session::InputRuntimePlan,
-    permissions_ready: bool,
+    capture_ready: bool,
+    inject_ready: bool,
 ) -> Option<connection::PeerConnectionHandler> {
     if !plan.start_inject_receiver && !plan.start_capture_forwarder {
         return None;
@@ -200,16 +206,12 @@ fn input_peer_handler(
     #[cfg(target_os = "macos")]
     {
         let injector = if plan.start_inject_receiver {
-            Some(nexkvm_platform_macos::MacosInputInjector::new(
-                permissions_ready,
-            ))
+            Some(nexkvm_platform_macos::MacosInputInjector::new(inject_ready))
         } else {
             None
         };
         let capture = if plan.start_capture_forwarder {
-            Some(nexkvm_platform_macos::MacosInputCapture::new(
-                permissions_ready,
-            ))
+            Some(nexkvm_platform_macos::MacosInputCapture::new(capture_ready))
         } else {
             None
         };
@@ -241,7 +243,7 @@ fn input_peer_handler(
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = permissions_ready;
+        let _ = (capture_ready, inject_ready);
         let injector = if plan.start_inject_receiver {
             Some(nexkvm_platform_windows::WindowsInputInjector::new())
         } else {
@@ -280,8 +282,21 @@ fn input_peer_handler(
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = permissions_ready;
+        let _ = (capture_ready, inject_ready);
         None
+    }
+}
+
+fn input_permissions_ready(
+    role: input_session::InputRuntimeRole,
+    can_capture_input: bool,
+    can_inject_input: bool,
+) -> bool {
+    match role {
+        input_session::InputRuntimeRole::Disabled => true,
+        input_session::InputRuntimeRole::Source => can_capture_input,
+        input_session::InputRuntimeRole::Target => can_inject_input,
+        input_session::InputRuntimeRole::Both => can_capture_input && can_inject_input,
     }
 }
 

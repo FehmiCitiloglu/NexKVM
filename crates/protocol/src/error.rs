@@ -14,6 +14,10 @@ pub enum ProtocolError {
         max: usize,
     },
 
+    /// The inbound bytes are not a nexkvm frame stream (for example HTTP/TLS probes).
+    #[error("protocol mismatch: {0}")]
+    ProtocolMismatch(&'static str),
+
     /// The buffer did not yet contain a full frame; the caller should read more.
     #[error("incomplete frame: need {needed} more bytes")]
     Incomplete {

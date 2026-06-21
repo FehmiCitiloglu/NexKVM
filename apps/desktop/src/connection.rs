@@ -7,6 +7,7 @@ use nexkvm_discovery::{DiscoveryService, ReconnectTarget};
 use nexkvm_network::{
     Connection, NetworkError, SecureConnection, Transport, TransportKind, establish_trusted_session,
 };
+use nexkvm_protocol::ProtocolError;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
@@ -80,7 +81,7 @@ pub fn spawn_inbound_accept_loop(
                             match secure_connection(connection, session_config).await {
                                 Ok(connection) => handler(connection),
                                 Err(error) => {
-                                    warn!(%error, "trusted session handshake failed");
+                                    log_handshake_failure(&error);
                                 }
                             }
                         });
@@ -89,7 +90,7 @@ pub fn spawn_inbound_accept_loop(
                             match secure_connection(connection, session_config).await {
                                 Ok(connection) => hold_connection_until_closed(connection).await,
                                 Err(error) => {
-                                    warn!(%error, "trusted session handshake failed");
+                                    log_handshake_failure(&error);
                                 }
                             }
                         });
@@ -101,6 +102,17 @@ pub fn spawn_inbound_accept_loop(
             }
         }
     });
+}
+
+fn log_handshake_failure(error: &NetworkError) {
+    if matches!(
+        error,
+        NetworkError::Protocol(ProtocolError::ProtocolMismatch(_))
+    ) {
+        debug!(%error, "non-nexkvm probe dropped");
+    } else {
+        warn!(%error, "trusted session handshake failed");
+    }
 }
 
 /// Drive trusted rediscovery targets into real transport connections.
