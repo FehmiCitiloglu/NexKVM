@@ -60,8 +60,9 @@ if [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
   echo "Signing app bundle with identity: $APPLE_CODESIGN_IDENTITY"
   codesign --force --deep --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_CODESIGN_IDENTITY" "$APP_DIR"
 else
-  echo "APPLE_CODESIGN_IDENTITY not set; building unsigned bundle."
-  echo "Unsigned bundles are for local development only and may trigger Gatekeeper warnings."
+  echo "APPLE_CODESIGN_IDENTITY not set; signing app bundle ad-hoc for local development."
+  codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" --sign - "$APP_DIR"
+  echo "Ad-hoc signed bundles are for local development only and may trigger Gatekeeper warnings."
 fi
 
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE"

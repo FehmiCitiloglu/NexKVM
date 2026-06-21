@@ -497,8 +497,21 @@ fn doctor() -> anyhow::Result<()> {
         {
             println!("  {line}");
         }
+        if !report.can_capture_input || !report.can_inject_input {
+            open_macos_accessibility_settings();
+            println!(
+                "  opened settings: add nexkvm.app or the terminal app you use, then restart nexkvm"
+            );
+        }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_accessibility_settings() {
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .status();
 }
 
 async fn permissions() -> anyhow::Result<()> {
