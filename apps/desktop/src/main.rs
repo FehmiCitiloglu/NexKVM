@@ -103,7 +103,13 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         report.can_capture_input && report.can_inject_input
     };
     #[cfg(not(target_os = "macos"))]
-    let input_permissions_ready = false;
+    let input_permissions_ready = backend
+        .as_ref()
+        .map(|backend| {
+            let caps = backend.capabilities();
+            caps.can_capture_input && caps.can_inject_input && !caps.permission_pending
+        })
+        .unwrap_or(false);
     let input_plan = input_session::plan_runtime(input_role, input_permissions_ready);
     info!(
         role = ?input_role,
