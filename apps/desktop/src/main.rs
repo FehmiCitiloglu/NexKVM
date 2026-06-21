@@ -123,7 +123,13 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         inject = input_plan.start_inject_receiver,
         "input runtime plan"
     );
-    let input_peer_handler = input_peer_handler(input_plan, input_can_capture, input_can_inject);
+    let input_handoff_edge = input_handoff_edge(config.input.handoff_edge);
+    let input_peer_handler = input_peer_handler(
+        input_plan,
+        input_can_capture,
+        input_can_inject,
+        input_handoff_edge,
+    );
     let trusted_peer_keys = trusted_public_keys();
     let local_identity = load_local_identity(&config_path, &config.device.name)?;
     let local_fingerprint = local_identity.public_key().fingerprint();
@@ -200,6 +206,7 @@ fn input_peer_handler(
     plan: input_session::InputRuntimePlan,
     capture_ready: bool,
     inject_ready: bool,
+    handoff_edge: input_session::HandoffEdge,
 ) -> Option<connection::PeerConnectionHandler> {
     if !plan.start_inject_receiver && !plan.start_capture_forwarder {
         return None;
@@ -231,9 +238,15 @@ fn input_peer_handler(
             if let Some(capture) = capture.clone() {
                 let connection = Arc::clone(&connection);
                 tokio::spawn(async move {
-                    if let Err(error) =
-                        input_session::forward_until_error(&capture, &*connection, MessageId(0))
-                            .await
+                    let capture_for_suppression = capture.clone();
+                    if let Err(error) = input_session::forward_extended_until_error(
+                        &capture,
+                        &*connection,
+                        MessageId(0),
+                        handoff_edge,
+                        move |suppressed| capture_for_suppression.set_suppressed(suppressed),
+                    )
+                    .await
                     {
                         tracing::warn!(%error, "input capture forwarding ended");
                     }
@@ -270,9 +283,14 @@ fn input_peer_handler(
             if let Some(capture) = capture.clone() {
                 let connection = Arc::clone(&connection);
                 tokio::spawn(async move {
-                    if let Err(error) =
-                        input_session::forward_until_error(&capture, &*connection, MessageId(0))
-                            .await
+                    if let Err(error) = input_session::forward_extended_until_error(
+                        &capture,
+                        &*connection,
+                        MessageId(0),
+                        handoff_edge,
+                        |_| {},
+                    )
+                    .await
                     {
                         tracing::warn!(%error, "Windows input capture forwarding ended");
                     }
@@ -285,6 +303,15 @@ fn input_peer_handler(
     {
         let _ = (capture_ready, inject_ready);
         None
+    }
+}
+
+fn input_handoff_edge(edge: nexkvm_storage::InputHandoffEdge) -> input_session::HandoffEdge {
+    match edge {
+        nexkvm_storage::InputHandoffEdge::Left => input_session::HandoffEdge::Left,
+        nexkvm_storage::InputHandoffEdge::Right => input_session::HandoffEdge::Right,
+        nexkvm_storage::InputHandoffEdge::Top => input_session::HandoffEdge::Top,
+        nexkvm_storage::InputHandoffEdge::Bottom => input_session::HandoffEdge::Bottom,
     }
 }
 

@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use nexkvm_input::{InputCapture, InputError, InputEvent, MouseButton};
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// Quartz event kinds relevant to capture.
@@ -57,6 +58,10 @@ pub struct CapturedCgEvent {
     pub scroll_dx: Option<f64>,
     /// Scroll delta y in line units.
     pub scroll_dy: Option<f64>,
+    /// Mouse delta x in display-fraction units.
+    pub delta_dx: Option<f64>,
+    /// Mouse delta y in display-fraction units.
+    pub delta_dy: Option<f64>,
 }
 
 impl Default for CapturedCgEvent {
@@ -68,6 +73,8 @@ impl Default for CapturedCgEvent {
             keycode: None,
             scroll_dx: None,
             scroll_dy: None,
+            delta_dx: None,
+            delta_dy: None,
         }
     }
 }
@@ -75,11 +82,21 @@ impl Default for CapturedCgEvent {
 /// Translate captured CoreGraphics fields into the platform-neutral input event.
 #[must_use]
 pub fn plan_capture_event(event: CapturedCgEvent) -> Option<InputEvent> {
+    plan_capture_event_with_mode(event, false)
+}
+
+fn plan_capture_event_with_mode(event: CapturedCgEvent, suppressed: bool) -> Option<InputEvent> {
     match event.event_type {
         CgCaptureEventType::MouseMoved
         | CgCaptureEventType::LeftMouseDragged
         | CgCaptureEventType::RightMouseDragged
         | CgCaptureEventType::OtherMouseDragged => {
+            if suppressed {
+                return Some(InputEvent::RelativeMove {
+                    dx: event.delta_dx?,
+                    dy: event.delta_dy?,
+                });
+            }
             let (x, y) = event.location?;
             let (width, height) = event.display_size?;
             Some(InputEvent::PointerMove {
@@ -147,21 +164,28 @@ fn cg_to_hid_keycode(keycode: u16) -> Option<u32> {
 #[derive(Debug, Clone)]
 pub struct MacosInputCapture {
     accessibility_trusted: bool,
-    receiver: Option<std::sync::Arc<Mutex<Receiver<InputEvent>>>>,
+    receiver: Option<Arc<Mutex<Receiver<InputEvent>>>>,
+    suppressed: Arc<AtomicBool>,
 }
 
 impl MacosInputCapture {
     #[must_use]
     pub fn new(accessibility_trusted: bool) -> Self {
+        let suppressed = Arc::new(AtomicBool::new(false));
         let receiver = if accessibility_trusted {
-            Some(start_event_tap_capture())
+            Some(start_event_tap_capture(Arc::clone(&suppressed)))
         } else {
             None
         };
         Self {
             accessibility_trusted,
             receiver,
+            suppressed,
         }
+    }
+
+    pub fn set_suppressed(&self, suppressed: bool) {
+        self.suppressed.store(suppressed, Ordering::SeqCst);
     }
 
     #[cfg(test)]
@@ -172,7 +196,8 @@ impl MacosInputCapture {
         }
         Self {
             accessibility_trusted,
-            receiver: Some(std::sync::Arc::new(Mutex::new(receiver))),
+            receiver: Some(Arc::new(Mutex::new(receiver))),
+            suppressed: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -208,8 +233,10 @@ type CGEventTapCallBack =
 
 const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
+const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_FIELD_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+const K_CG_MOUSE_EVENT_DELTA_X: u32 = 4;
+const K_CG_MOUSE_EVENT_DELTA_Y: u32 = 5;
 const K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_1: u32 = 11;
 const K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_2: u32 = 12;
 
@@ -252,15 +279,21 @@ unsafe extern "C" {
     static kCFRunLoopCommonModes: CFStringRef;
 }
 
-fn start_event_tap_capture() -> std::sync::Arc<Mutex<Receiver<InputEvent>>> {
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || run_event_tap(sender));
-    std::sync::Arc::new(Mutex::new(receiver))
+#[derive(Debug)]
+struct CaptureCallbackState {
+    sender: Sender<InputEvent>,
+    suppressed: Arc<AtomicBool>,
 }
 
-fn run_event_tap(sender: Sender<InputEvent>) {
-    let sender = Box::new(sender);
-    let user_info = Box::into_raw(sender).cast::<c_void>();
+fn start_event_tap_capture(suppressed: Arc<AtomicBool>) -> Arc<Mutex<Receiver<InputEvent>>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || run_event_tap(CaptureCallbackState { sender, suppressed }));
+    Arc::new(Mutex::new(receiver))
+}
+
+fn run_event_tap(state: CaptureCallbackState) {
+    let state = Box::new(state);
+    let user_info = Box::into_raw(state).cast::<c_void>();
     let mask = capture_event_mask();
     // SAFETY: The callback receives the boxed sender via `user_info` for the
     // lifetime of the run loop thread. The event mask only enables known event
@@ -269,7 +302,7 @@ fn run_event_tap(sender: Sender<InputEvent>) {
         CGEventTapCreate(
             K_CG_SESSION_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+            K_CG_EVENT_TAP_OPTION_DEFAULT,
             mask,
             capture_callback,
             user_info,
@@ -278,7 +311,7 @@ fn run_event_tap(sender: Sender<InputEvent>) {
     if tap.is_null() {
         // SAFETY: Reclaim the sender if the tap could not be created.
         unsafe {
-            drop(Box::from_raw(user_info.cast::<Sender<InputEvent>>()));
+            drop(Box::from_raw(user_info.cast::<CaptureCallbackState>()));
         }
         return;
     }
@@ -308,11 +341,15 @@ extern "C" fn capture_callback(
     let Some(captured) = captured_from_native(event_type, event) else {
         return event;
     };
-    if let Some(input_event) = plan_capture_event(captured) {
-        // SAFETY: `user_info` was created from `Box<Sender<InputEvent>>` in
-        // `run_event_tap` and lives for the run loop thread lifetime.
-        let sender = unsafe { &*(user_info.cast::<Sender<InputEvent>>()) };
-        let _ = sender.send(input_event);
+    // SAFETY: `user_info` was created from `Box<CaptureCallbackState>` in
+    // `run_event_tap` and lives for the run loop thread lifetime.
+    let state = unsafe { &*(user_info.cast::<CaptureCallbackState>()) };
+    let suppressed = state.suppressed.load(Ordering::SeqCst);
+    if let Some(input_event) = plan_capture_event_with_mode(captured, suppressed) {
+        let _ = state.sender.send(input_event);
+        if suppressed {
+            return ptr::null_mut();
+        }
     }
     event
 }
@@ -329,6 +366,8 @@ fn captured_from_native(event_type: u32, event: CGEventRef) -> Option<CapturedCg
         unsafe { CGEventGetIntegerValueField(event, K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_1) };
     let scroll_x =
         unsafe { CGEventGetIntegerValueField(event, K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_2) };
+    let delta_x = unsafe { CGEventGetIntegerValueField(event, K_CG_MOUSE_EVENT_DELTA_X) };
+    let delta_y = unsafe { CGEventGetIntegerValueField(event, K_CG_MOUSE_EVENT_DELTA_Y) };
     Some(CapturedCgEvent {
         event_type,
         location: Some((location.x, location.y)),
@@ -336,6 +375,8 @@ fn captured_from_native(event_type: u32, event: CGEventRef) -> Option<CapturedCg
         keycode: Some(keycode as u16),
         scroll_dx: Some(scroll_x as f64),
         scroll_dy: Some(scroll_y as f64),
+        delta_dx: Some(delta_x as f64 / display.0.max(1.0)),
+        delta_dy: Some(delta_y as f64 / display.1.max(1.0)),
     })
 }
 

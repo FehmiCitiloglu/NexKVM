@@ -57,7 +57,8 @@ where
     Ok(next_id)
 }
 
-pub async fn forward_until_error<C, K>(
+#[cfg(test)]
+async fn forward_until_error<C, K>(
     capture: &C,
     connection: &K,
     first_id: MessageId,
@@ -71,6 +72,147 @@ where
         let event = capture.next_event().await?;
         connection.send(encode_input_event(next_id, event)).await?;
         next_id = next_id.next();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExtendedInputShare {
+    edge: HandoffEdge,
+    focus: ShareFocus,
+    last_local_pos: Option<(f64, f64)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ShareFocus {
+    Local,
+    Remote { pos: (f64, f64) },
+}
+
+impl ExtendedInputShare {
+    pub fn new(edge: HandoffEdge) -> Self {
+        Self {
+            edge,
+            focus: ShareFocus::Local,
+            last_local_pos: None,
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self.focus, ShareFocus::Remote { .. })
+    }
+
+    pub fn route(&mut self, event: InputEvent) -> Option<InputEvent> {
+        match self.focus {
+            ShareFocus::Local => self.route_local(event),
+            ShareFocus::Remote { pos } => self.route_remote(event, pos),
+        }
+    }
+
+    fn route_local(&mut self, event: InputEvent) -> Option<InputEvent> {
+        let InputEvent::PointerMove { x, y } = event else {
+            return None;
+        };
+        self.last_local_pos = Some((x, y));
+        if !at_handoff_edge(self.edge, x, y) {
+            return None;
+        }
+        let entry = entry_for_edge(self.edge, x, y);
+        self.focus = ShareFocus::Remote { pos: entry };
+        Some(InputEvent::PointerMove {
+            x: entry.0,
+            y: entry.1,
+        })
+    }
+
+    fn route_remote(&mut self, event: InputEvent, pos: (f64, f64)) -> Option<InputEvent> {
+        match event {
+            InputEvent::RelativeMove { dx, dy } => self.advance_remote_pointer(pos, dx, dy),
+            InputEvent::PointerMove { x, y } => {
+                let (last_x, last_y) = self.last_local_pos.unwrap_or((x, y));
+                self.last_local_pos = Some((x, y));
+                self.advance_remote_pointer(pos, x - last_x, y - last_y)
+            }
+            other => Some(other),
+        }
+    }
+
+    fn advance_remote_pointer(&mut self, pos: (f64, f64), dx: f64, dy: f64) -> Option<InputEvent> {
+        let next = (pos.0 + dx, pos.1 + dy);
+        if returned_to_local(self.edge, next.0, next.1) {
+            self.focus = ShareFocus::Local;
+            return None;
+        }
+        let clamped = (next.0.clamp(0.0, 1.0), next.1.clamp(0.0, 1.0));
+        self.focus = ShareFocus::Remote { pos: clamped };
+        Some(InputEvent::PointerMove {
+            x: clamped.0,
+            y: clamped.1,
+        })
+    }
+}
+
+pub async fn forward_extended_until_error<C, K, S>(
+    capture: &C,
+    connection: &K,
+    first_id: MessageId,
+    edge: HandoffEdge,
+    mut set_suppressed: S,
+) -> Result<(), InputSessionError>
+where
+    C: InputCapture + ?Sized,
+    K: Connection + ?Sized,
+    S: FnMut(bool),
+{
+    let mut next_id = first_id;
+    let mut share = ExtendedInputShare::new(edge);
+    loop {
+        let event = capture.next_event().await?;
+        let was_remote = share.is_remote();
+        let routed = share.route(event);
+        let is_remote = share.is_remote();
+        if was_remote != is_remote {
+            set_suppressed(is_remote);
+        }
+        if let Some(event) = routed {
+            connection.send(encode_input_event(next_id, event)).await?;
+            next_id = next_id.next();
+        }
+    }
+}
+
+fn at_handoff_edge(edge: HandoffEdge, x: f64, y: f64) -> bool {
+    const EPSILON: f64 = 0.995;
+    match edge {
+        HandoffEdge::Left => x <= 1.0 - EPSILON,
+        HandoffEdge::Right => x >= EPSILON,
+        HandoffEdge::Top => y <= 1.0 - EPSILON,
+        HandoffEdge::Bottom => y >= EPSILON,
+    }
+}
+
+fn entry_for_edge(edge: HandoffEdge, x: f64, y: f64) -> (f64, f64) {
+    match edge {
+        HandoffEdge::Left => (1.0, y.clamp(0.0, 1.0)),
+        HandoffEdge::Right => (0.0, y.clamp(0.0, 1.0)),
+        HandoffEdge::Top => (x.clamp(0.0, 1.0), 1.0),
+        HandoffEdge::Bottom => (x.clamp(0.0, 1.0), 0.0),
+    }
+}
+
+fn returned_to_local(edge: HandoffEdge, x: f64, y: f64) -> bool {
+    match edge {
+        HandoffEdge::Left => x > 1.0,
+        HandoffEdge::Right => x < 0.0,
+        HandoffEdge::Top => y > 1.0,
+        HandoffEdge::Bottom => y < 0.0,
     }
 }
 
@@ -168,6 +310,69 @@ mod tests {
             decode_input_event(envelope),
             Err(InputSessionError::UnexpectedKind(MessageKind::Clipboard))
         ));
+    }
+
+    #[test]
+    fn extended_share_stays_local_until_handoff_edge() {
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+
+        assert_eq!(
+            share.route(InputEvent::PointerMove { x: 0.5, y: 0.5 }),
+            None
+        );
+        assert!(!share.is_remote());
+
+        assert_eq!(
+            share.route(InputEvent::KeyPress(0x04)),
+            None,
+            "keyboard stays local before remote focus"
+        );
+    }
+
+    #[test]
+    fn extended_share_enters_remote_at_configured_edge() {
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+
+        assert_eq!(
+            share.route(InputEvent::PointerMove { x: 1.0, y: 0.25 }),
+            Some(InputEvent::PointerMove { x: 0.0, y: 0.25 })
+        );
+        assert!(share.is_remote());
+    }
+
+    #[test]
+    fn extended_share_forwards_keyboard_and_remote_motion() {
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+        assert!(
+            share
+                .route(InputEvent::PointerMove { x: 1.0, y: 0.5 })
+                .is_some()
+        );
+
+        assert_eq!(
+            share.route(InputEvent::KeyPress(0x04)),
+            Some(InputEvent::KeyPress(0x04))
+        );
+        assert_eq!(
+            share.route(InputEvent::RelativeMove { dx: 0.25, dy: 0.1 }),
+            Some(InputEvent::PointerMove { x: 0.25, y: 0.6 })
+        );
+    }
+
+    #[test]
+    fn extended_share_returns_local_when_remote_crosses_back() {
+        let mut share = ExtendedInputShare::new(HandoffEdge::Right);
+        assert!(
+            share
+                .route(InputEvent::PointerMove { x: 1.0, y: 0.5 })
+                .is_some()
+        );
+
+        assert_eq!(
+            share.route(InputEvent::RelativeMove { dx: -0.1, dy: 0.0 }),
+            None
+        );
+        assert!(!share.is_remote());
     }
 
     #[derive(Debug)]

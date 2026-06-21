@@ -131,6 +131,8 @@ pub struct InputConfig {
     pub control_role: InputControlRole,
     /// Friendly trusted-peer name or fingerprint selected as the active target.
     pub active_peer: Option<String>,
+    /// Which local desktop edge hands control to the active peer.
+    pub handoff_edge: InputHandoffEdge,
     /// HID usage id for the emergency stop key. Default 41 is Escape.
     pub emergency_stop_keycode: u32,
 }
@@ -140,9 +142,25 @@ impl Default for InputConfig {
         Self {
             control_role: InputControlRole::Disabled,
             active_peer: None,
+            handoff_edge: InputHandoffEdge::Right,
             emergency_stop_keycode: 41,
         }
     }
+}
+
+/// Local desktop edge used to hand control to a peer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputHandoffEdge {
+    /// Left edge.
+    Left,
+    /// Right edge.
+    #[default]
+    Right,
+    /// Top edge.
+    Top,
+    /// Bottom edge.
+    Bottom,
 }
 
 /// Whether this daemon captures, injects, both, or neither.
@@ -326,6 +344,7 @@ mod tests {
 [input]
 control_role = "source"
 active_peer = "studio-mac"
+handoff_edge = "right"
 emergency_stop_keycode = 41
 "#;
 
@@ -333,6 +352,7 @@ emergency_stop_keycode = 41
 
         assert_eq!(parsed.input.control_role, InputControlRole::Source);
         assert_eq!(parsed.input.active_peer.as_deref(), Some("studio-mac"));
+        assert_eq!(parsed.input.handoff_edge, InputHandoffEdge::Right);
         assert_eq!(parsed.input.emergency_stop_keycode, 41);
 
         let rendered = toml::to_string_pretty(&parsed).unwrap();
