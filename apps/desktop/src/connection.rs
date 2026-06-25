@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nexkvm_core::identity::DeviceId;
 use nexkvm_crypto::{DeviceKeypair, PublicKey};
@@ -61,6 +62,36 @@ pub async fn connect_reconnect_target(
     })
 }
 
+/// Dial a configured peer address over the selected transport.
+pub async fn connect_explicit_addr(
+    transport: Arc<dyn Transport>,
+    addr: SocketAddr,
+    session_config: Option<TrustedSessionConfig>,
+) -> Result<Box<dyn Connection>, NetworkError> {
+    secure_connection(transport.connect(addr).await?, session_config).await
+}
+
+/// Resolve and dial a configured peer endpoint over the selected transport.
+pub async fn connect_explicit_endpoint(
+    transport: Arc<dyn Transport>,
+    endpoint: &str,
+    session_config: Option<TrustedSessionConfig>,
+) -> Result<(SocketAddr, Box<dyn Connection>), NetworkError> {
+    let mut last_error = None;
+    let addrs = tokio::net::lookup_host(endpoint)
+        .await
+        .map_err(NetworkError::Io)?;
+
+    for addr in addrs {
+        match connect_explicit_addr(Arc::clone(&transport), addr, session_config.clone()).await {
+            Ok(connection) => return Ok((addr, connection)),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(last_error.unwrap_or(NetworkError::AllTransportsFailed))
+}
+
 /// Accept inbound links for the daemon lifetime.
 pub fn spawn_inbound_accept_loop(
     transport: Arc<dyn Transport>,
@@ -98,6 +129,45 @@ pub fn spawn_inbound_accept_loop(
                 }
                 Err(error) => {
                     warn!(%error, "failed to accept peer connection");
+                }
+            }
+        }
+    });
+}
+
+/// Keep trying a manually configured peer address until the first connection
+/// succeeds. Discovery reconnect remains responsible for ongoing peer liveness.
+pub fn spawn_explicit_connect_driver(
+    transport: Arc<dyn Transport>,
+    endpoint: String,
+    session_config: Option<TrustedSessionConfig>,
+    handler: Option<PeerConnectionHandler>,
+) {
+    tokio::spawn(async move {
+        let mut attempt: u64 = 0;
+        loop {
+            match connect_explicit_endpoint(
+                Arc::clone(&transport),
+                endpoint.as_str(),
+                session_config.clone(),
+            )
+            .await
+            {
+                Ok((addr, connection)) => {
+                    info!(endpoint = %endpoint, %addr, attempt, "explicit peer connected");
+                    if let Some(handler) = &handler {
+                        handler(connection);
+                    } else {
+                        tokio::spawn(async move {
+                            hold_connection_until_closed(connection).await;
+                        });
+                    }
+                    break;
+                }
+                Err(error) => {
+                    warn!(endpoint = %endpoint, attempt, %error, "explicit peer connect failed");
+                    attempt = attempt.saturating_add(1);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
                 }
             }
         }
@@ -230,6 +300,44 @@ mod tests {
         assert_eq!(attempt.device_name, "linux-peer");
         assert_eq!(attempt.addr, addr);
         assert_eq!(attempt.transport, TransportKind::Tcp);
+
+        let server_conn = accept.await.unwrap();
+        assert_eq!(server_conn.kind(), TransportKind::Tcp);
+    }
+
+    #[tokio::test]
+    async fn explicit_addr_dials_real_tcp_transport() {
+        let server = TcpTransport::bind(loopback()).await.unwrap();
+        let addr = server.local_addr().unwrap();
+        let accept = tokio::spawn(async move { server.accept().await.unwrap() });
+
+        let client: Arc<dyn Transport> = Arc::new(TcpTransport::bind(loopback()).await.unwrap());
+        let connection = super::connect_explicit_addr(client, addr, None)
+            .await
+            .unwrap();
+
+        assert_eq!(connection.peer_addr(), addr);
+        assert_eq!(connection.kind(), TransportKind::Tcp);
+
+        let server_conn = accept.await.unwrap();
+        assert_eq!(server_conn.kind(), TransportKind::Tcp);
+    }
+
+    #[tokio::test]
+    async fn explicit_endpoint_dials_real_tcp_transport() {
+        let server = TcpTransport::bind(loopback()).await.unwrap();
+        let addr = server.local_addr().unwrap();
+        let accept = tokio::spawn(async move { server.accept().await.unwrap() });
+
+        let client: Arc<dyn Transport> = Arc::new(TcpTransport::bind(loopback()).await.unwrap());
+        let (resolved_addr, connection) =
+            super::connect_explicit_endpoint(client, &addr.to_string(), None)
+                .await
+                .unwrap();
+
+        assert_eq!(resolved_addr, addr);
+        assert_eq!(connection.peer_addr(), addr);
+        assert_eq!(connection.kind(), TransportKind::Tcp);
 
         let server_conn = accept.await.unwrap();
         assert_eq!(server_conn.kind(), TransportKind::Tcp);

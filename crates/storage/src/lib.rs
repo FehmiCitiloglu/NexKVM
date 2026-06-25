@@ -88,6 +88,8 @@ impl Default for DeviceConfig {
 pub struct NetworkConfig {
     /// Port to listen on for incoming connections.
     pub listen_port: u16,
+    /// Optional explicit peer address to dial on startup (`host:port`).
+    pub connect_addr: Option<String>,
     /// Whether to advertise this device on the LAN for discovery.
     pub enable_discovery: bool,
     /// Preferred transports in priority order (e.g. `["quic", "tcp"]`).
@@ -98,6 +100,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             listen_port: 47_654,
+            connect_addr: None,
             enable_discovery: true,
             transports: vec!["quic".into(), "tcp".into()],
         }
@@ -364,6 +367,27 @@ remote_focus_timeout_millis = 3000
         let rendered = toml::to_string_pretty(&parsed).unwrap();
         assert!(rendered.contains("[input]"));
         assert!(rendered.contains("control_role = \"source\""));
+    }
+
+    #[test]
+    fn network_connect_addr_round_trips_through_toml() {
+        let text = r#"
+[network]
+listen_port = 47654
+enable_discovery = true
+connect_addr = "192.168.1.27:47654"
+transports = ["tcp"]
+"#;
+
+        let parsed: Config = toml::from_str(text).unwrap();
+
+        assert_eq!(
+            parsed.network.connect_addr.as_deref(),
+            Some("192.168.1.27:47654")
+        );
+
+        let rendered = toml::to_string_pretty(&parsed).unwrap();
+        assert!(rendered.contains("connect_addr = \"192.168.1.27:47654\""));
     }
 
     #[test]

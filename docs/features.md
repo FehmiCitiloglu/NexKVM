@@ -50,8 +50,15 @@ planned.
 - [x] UDP LAN discovery startup in daemon mode.
 - [x] Trusted-peer rediscovery logging through discovery service.
 - [x] Trusted-peer rediscovery to cross-platform TCP connection driver.
+- [x] Explicit peer address launch profile for GUI-managed startup when LAN
+  discovery is not enough or a specific target should be dialed.
 - [x] Input sharing runtime configuration for disabled, source, target, and
   both roles.
+- [x] Barrier-inspired linked-screen input controller in the daemon forwarding
+  path, reusing the pure topology/boundary state machine for edge handoff.
+- [x] Source-side local input suppression while remote focus is active on macOS
+  and Windows, with emergency key and timeout release still wired through the
+  shared router.
 
 ### Protocol
 

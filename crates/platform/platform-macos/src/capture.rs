@@ -64,6 +64,15 @@ pub struct CapturedCgEvent {
     pub delta_dy: Option<f64>,
 }
 
+/// Planned handling for one captured CoreGraphics event.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaptureAction {
+    /// Event to forward into the NexKVM input stream, if supported.
+    pub forward: Option<InputEvent>,
+    /// Whether the original event should continue to the local OS.
+    pub pass_through: bool,
+}
+
 impl Default for CapturedCgEvent {
     fn default() -> Self {
         Self {
@@ -82,7 +91,15 @@ impl Default for CapturedCgEvent {
 /// Translate captured CoreGraphics fields into the platform-neutral input event.
 #[must_use]
 pub fn plan_capture_event(event: CapturedCgEvent) -> Option<InputEvent> {
-    plan_capture_event_with_mode(event, false)
+    plan_capture_action(event, false).forward
+}
+
+#[must_use]
+pub fn plan_capture_action(event: CapturedCgEvent, suppressed: bool) -> CaptureAction {
+    CaptureAction {
+        forward: plan_capture_event_with_mode(event, suppressed),
+        pass_through: !suppressed,
+    }
 }
 
 fn plan_capture_event_with_mode(event: CapturedCgEvent, suppressed: bool) -> Option<InputEvent> {
@@ -345,10 +362,15 @@ extern "C" fn capture_callback(
     // `run_event_tap` and lives for the run loop thread lifetime.
     let state = unsafe { &*(user_info.cast::<CaptureCallbackState>()) };
     let suppressed = state.suppressed.load(Ordering::SeqCst);
-    if let Some(input_event) = plan_capture_event_with_mode(captured, suppressed) {
+    let action = plan_capture_action(captured, suppressed);
+    if let Some(input_event) = action.forward {
         let _ = state.sender.send(input_event);
     }
-    event
+    if action.pass_through {
+        event
+    } else {
+        ptr::null_mut()
+    }
 }
 
 fn captured_from_native(event_type: u32, event: CGEventRef) -> Option<CapturedCgEvent> {
@@ -476,6 +498,25 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn suppressed_mouse_motion_is_forwarded_and_not_passed_through() {
+        let action = plan_capture_action(
+            CapturedCgEvent {
+                event_type: CgCaptureEventType::MouseMoved,
+                delta_dx: Some(0.2),
+                delta_dy: Some(-0.1),
+                ..CapturedCgEvent::default()
+            },
+            true,
+        );
+
+        assert_eq!(
+            action.forward,
+            Some(InputEvent::RelativeMove { dx: 0.2, dy: -0.1 })
+        );
+        assert!(!action.pass_through);
     }
 
     #[tokio::test]

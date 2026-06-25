@@ -1,3 +1,4 @@
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
@@ -23,6 +24,7 @@ struct NexkvmGui {
     section: Section,
     status: String,
     daemon: Option<Child>,
+    daemon_log_path: PathBuf,
     pairing_addr: String,
     pairing_uri: String,
     accept_uri: String,
@@ -33,12 +35,14 @@ impl NexkvmGui {
     fn load() -> Self {
         let config_path = config_path();
         let config = Config::load(&config_path).unwrap_or_default();
+        let daemon_log_path = daemon_log_path(&config_path);
         Self {
             config_path,
             config,
             section: Section::Overview,
             status: "Ready".into(),
             daemon: None,
+            daemon_log_path,
             pairing_addr: local_pairing_addr(),
             pairing_uri: String::new(),
             accept_uri: String::new(),
@@ -89,15 +93,33 @@ impl NexkvmGui {
         if !self.persist_config() {
             return;
         }
+        let log_file = match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.daemon_log_path)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                self.status = format!("Failed to open daemon log: {error}");
+                return;
+            }
+        };
+        let stderr_log = match log_file.try_clone() {
+            Ok(file) => file,
+            Err(error) => {
+                self.status = format!("Failed to open daemon log: {error}");
+                return;
+            }
+        };
         match Command::new(nexkvm_binary())
             .arg("--debug")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(stderr_log))
             .spawn()
         {
             Ok(child) => {
                 self.daemon = Some(child);
-                self.status = "Daemon started".into();
+                self.status = format!("Daemon started; log {}", self.daemon_log_path.display());
             }
             Err(error) => self.status = format!("Failed to start daemon: {error}"),
         }
@@ -193,11 +215,15 @@ impl eframe::App for NexkvmGui {
 
 impl NexkvmGui {
     fn refresh_daemon_state(&mut self) {
-        if let Some(child) = &mut self.daemon
-            && matches!(child.try_wait(), Ok(Some(_)))
-        {
+        let exit_status = self
+            .daemon
+            .as_mut()
+            .and_then(|child| child.try_wait().ok().flatten());
+        if let Some(status) = exit_status {
             self.daemon = None;
-            self.status = "Daemon exited".into();
+            self.status = format!("Daemon exited: {status}");
+            self.command_output = read_log_tail(&self.daemon_log_path, 16_000);
+            self.section = Section::Pairing;
         }
     }
 
@@ -282,6 +308,11 @@ impl NexkvmGui {
                 );
                 metric_row(ui, "Mode", role_label(self.config.input.control_role));
                 metric_row(ui, "Port", &self.config.network.listen_port.to_string());
+                metric_row(
+                    ui,
+                    "Connect to",
+                    connect_addr_label(&self.config.network.connect_addr),
+                );
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
                     if primary_button(ui, "Start").clicked() {
@@ -317,6 +348,11 @@ impl NexkvmGui {
                     ui,
                     "Active peer",
                     active_peer_label(&self.config.input.active_peer),
+                );
+                metric_row(
+                    ui,
+                    "Peer address",
+                    connect_addr_label(&self.config.network.connect_addr),
                 );
                 metric_row(ui, "Handoff", edge_label(self.config.input.handoff_edge));
             }),
@@ -420,6 +456,7 @@ impl NexkvmGui {
                     ui.label(field_label("Listen port"));
                     ui.add(egui::DragValue::new(&mut self.config.network.listen_port));
                 });
+                labeled_text_option(ui, "Connect address", &mut self.config.network.connect_addr);
             }),
             _ => {}
         });
@@ -671,19 +708,18 @@ fn card_title(ui: &mut egui::Ui, text: &str) {
 }
 
 fn metric_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    if ui.available_width() < 260.0 {
-        ui.vertical(|ui| {
-            ui.label(field_label(label));
-            ui.label(egui::RichText::new(value).color(egui::Color32::from_rgb(235, 239, 246)));
-        });
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
+    ui.horizontal(|ui| {
         ui.set_min_height(24.0);
-        ui.label(field_label(label));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(value).color(egui::Color32::from_rgb(235, 239, 246)));
-        });
+        let label_width = ui.available_width().min(118.0);
+        ui.add_sized([label_width, 20.0], egui::Label::new(field_label(label)));
+        let value_width = ui.available_width().max(64.0);
+        let value = truncate_for_width(value, value_width, 7.0);
+        ui.add_sized(
+            [value_width, 20.0],
+            egui::Label::new(
+                egui::RichText::new(value).color(egui::Color32::from_rgb(235, 239, 246)),
+            ),
+        );
     });
 }
 
@@ -779,6 +815,10 @@ fn edge_label(edge: InputHandoffEdge) -> &'static str {
 
 fn active_peer_label(active_peer: &Option<String>) -> &str {
     active_peer.as_deref().unwrap_or("Auto")
+}
+
+fn connect_addr_label(connect_addr: &Option<String>) -> &str {
+    connect_addr.as_deref().unwrap_or("Discovery")
 }
 
 fn emergency_label(keycode: u32) -> String {
@@ -1067,7 +1107,16 @@ fn draw_handoff_arrow(
 }
 
 fn config_path() -> PathBuf {
-    let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+    let base = if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .map(PathBuf::from)
+            .or_else(|_| {
+                std::env::var("USERPROFILE")
+                    .map(PathBuf::from)
+                    .map(|home| home.join("AppData").join("Roaming"))
+            })
+            .unwrap_or_else(|_| PathBuf::from("."))
+    } else if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         PathBuf::from(xdg)
     } else if let Ok(home) = std::env::var("HOME") {
         let home = PathBuf::from(home);
@@ -1076,19 +1125,59 @@ fn config_path() -> PathBuf {
         } else {
             home.join(".config")
         }
-    } else if let Ok(appdata) = std::env::var("APPDATA") {
-        PathBuf::from(appdata)
     } else {
         PathBuf::from(".")
     };
     base.join("nexkvm").join("config.toml")
 }
 
+fn daemon_log_path(config_path: &std::path::Path) -> PathBuf {
+    config_path
+        .parent()
+        .map(|parent| parent.join("daemon.log"))
+        .unwrap_or_else(|| PathBuf::from("nexkvm-daemon.log"))
+}
+
 fn nexkvm_binary() -> PathBuf {
     if let Ok(path) = std::env::var("NEXKVM_BIN") {
         return PathBuf::from(path);
     }
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(dir) = current_exe.parent()
+    {
+        let sibling = dir.join(executable_name("nexkvm"));
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let local_bin = PathBuf::from(home)
+            .join(".local")
+            .join("bin")
+            .join(executable_name("nexkvm"));
+        if local_bin.is_file() {
+            return local_bin;
+        }
+    }
     PathBuf::from("nexkvm")
+}
+
+fn executable_name(base: &str) -> String {
+    if cfg!(windows) {
+        format!("{base}.exe")
+    } else {
+        base.into()
+    }
+}
+
+fn read_log_tail(path: &std::path::Path, max_bytes: usize) -> String {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let start = bytes.len().saturating_sub(max_bytes);
+            String::from_utf8_lossy(&bytes[start..]).into_owned()
+        }
+        Err(error) => format!("Failed to read daemon log {}: {error}", path.display()),
+    }
 }
 
 fn local_pairing_addr() -> String {

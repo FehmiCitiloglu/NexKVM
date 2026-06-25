@@ -162,6 +162,32 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         }
     };
 
+    if let Some(connect_addr) = config
+        .network
+        .connect_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+    {
+        match transport.as_ref() {
+            Some(transport) => {
+                info!(endpoint = connect_addr, "explicit peer connect configured");
+                connection::spawn_explicit_connect_driver(
+                    Arc::clone(transport),
+                    connect_addr.to_owned(),
+                    Some(session_config.clone()),
+                    input_peer_handler.clone(),
+                );
+            }
+            None => {
+                tracing::warn!(
+                    endpoint = connect_addr,
+                    "explicit peer connect disabled because transport is unavailable"
+                );
+            }
+        }
+    }
+
     // 7. LAN discovery: advertise this device and auto-reconnect trusted peers.
     //    Kept alive for the daemon's lifetime; dropping it aborts its tasks.
     let _discovery = if config.network.enable_discovery {
@@ -289,6 +315,7 @@ fn input_peer_handler(
             if let Some(capture) = capture.clone() {
                 let connection = Arc::clone(&connection);
                 tokio::spawn(async move {
+                    let capture_for_suppression = capture.clone();
                     if let Err(error) = input_session::forward_extended_until_error(
                         &capture,
                         &*connection,
@@ -296,7 +323,7 @@ fn input_peer_handler(
                         handoff_edge,
                         emergency_stop_keycode,
                         remote_focus_timeout_millis,
-                        |_| {},
+                        move |suppressed| capture_for_suppression.set_suppressed(suppressed),
                     )
                     .await
                     {
@@ -535,6 +562,10 @@ fn doctor() -> anyhow::Result<()> {
     println!("  config: {}", path.display());
     println!("  device name: {}", config.device.name);
     println!("  discovery: {}", config.network.enable_discovery);
+    println!(
+        "  explicit connect: {}",
+        config.network.connect_addr.as_deref().unwrap_or("disabled")
+    );
     println!("  transports: {}", config.network.transports.join(","));
     println!("  require pairing: {}", config.security.require_pairing);
     println!("  plugins enabled: {}", config.plugins.enabled);
@@ -648,7 +679,16 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
 
 /// Resolve the config file path for the current platform.
 fn config_path() -> std::path::PathBuf {
-    let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+    let base = if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| {
+                std::env::var("USERPROFILE")
+                    .map(std::path::PathBuf::from)
+                    .map(|home| home.join("AppData").join("Roaming"))
+            })
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+    } else if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         std::path::PathBuf::from(xdg)
     } else if let Ok(home) = std::env::var("HOME") {
         let home = std::path::PathBuf::from(home);
@@ -657,8 +697,6 @@ fn config_path() -> std::path::PathBuf {
         } else {
             home.join(".config")
         }
-    } else if let Ok(appdata) = std::env::var("APPDATA") {
-        std::path::PathBuf::from(appdata)
     } else {
         std::path::PathBuf::from(".")
     };

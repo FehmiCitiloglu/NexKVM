@@ -1,5 +1,9 @@
 use bytes::Bytes;
-use nexkvm_input::{InputCapture, InputError, InputEvent, InputInjector};
+use nexkvm_core::identity::DeviceId;
+use nexkvm_input::{
+    BoundaryDetector, DisplayRect, Edge, EdgeLink, InputCapture, InputError, InputEvent,
+    InputInjector, MonitorId, MonitorLayout, MouseShareController, ShareOutput,
+};
 use nexkvm_network::{Connection, NetworkError};
 use nexkvm_protocol::{Envelope, MessageId, MessageKind, PROTOCOL_VERSION};
 
@@ -86,6 +90,7 @@ pub enum HandoffEdge {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg(test)]
 pub struct ExtendedInputShare {
     edge: HandoffEdge,
     emergency_stop_keycode: u32,
@@ -94,11 +99,13 @@ pub struct ExtendedInputShare {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg(test)]
 enum ShareFocus {
     Local,
     Remote { pos: (f64, f64) },
 }
 
+#[cfg(test)]
 impl ExtendedInputShare {
     pub fn new(edge: HandoffEdge, emergency_stop_keycode: u32) -> Self {
         Self {
@@ -174,6 +181,107 @@ impl ExtendedInputShare {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct LinkedScreenInputShare {
+    controller: MouseShareController,
+    emergency_stop_keycode: u32,
+    last_local_pos: Option<(f64, f64)>,
+}
+
+impl LinkedScreenInputShare {
+    pub fn single_peer(edge: HandoffEdge, emergency_stop_keycode: u32) -> Self {
+        let peer = DeviceId::generate();
+        let local_layout =
+            MonitorLayout::new(vec![(MonitorId(0), DisplayRect::new(0, 0, 1000, 1000))]);
+        let boundary = BoundaryDetector::new(
+            DisplayRect::new(0, 0, 1000, 1000),
+            vec![EdgeLink {
+                edge: linked_edge(edge),
+                peer,
+            }],
+        );
+        Self {
+            controller: MouseShareController::new(boundary, local_layout),
+            emergency_stop_keycode,
+            last_local_pos: None,
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.controller.active_peer().is_some()
+    }
+
+    pub fn release_remote(&mut self) -> bool {
+        self.last_local_pos = None;
+        self.controller.release_remote()
+    }
+
+    pub fn route(&mut self, event: InputEvent) -> Option<InputEvent> {
+        if matches!(event, InputEvent::KeyPress(keycode) if keycode == self.emergency_stop_keycode)
+        {
+            self.release_remote();
+            return None;
+        }
+
+        if !self.is_remote() {
+            return self.route_local(event);
+        }
+
+        self.route_remote(event)
+    }
+
+    fn route_local(&mut self, event: InputEvent) -> Option<InputEvent> {
+        let InputEvent::PointerMove { x, y } = event else {
+            return None;
+        };
+        self.last_local_pos = Some((x, y));
+        let (px, py) = normalized_to_default_pixels(x, y);
+        match self.controller.on_local_cursor(px, py) {
+            ShareOutput::EnterRemote(entry) => Some(entry.entry_event()),
+            _ => None,
+        }
+    }
+
+    fn route_remote(&mut self, event: InputEvent) -> Option<InputEvent> {
+        match event {
+            InputEvent::RelativeMove { dx, dy } => self.route_remote_motion(dx, dy),
+            InputEvent::PointerMove { x, y } => {
+                let (last_x, last_y) = self.last_local_pos.unwrap_or((x, y));
+                self.last_local_pos = Some((x, y));
+                self.route_remote_motion(x - last_x, y - last_y)
+            }
+            other => Some(other),
+        }
+    }
+
+    fn route_remote_motion(&mut self, dx: f64, dy: f64) -> Option<InputEvent> {
+        match self.controller.on_remote_motion(dx, dy) {
+            ShareOutput::Forward { event, .. } => Some(event),
+            ShareOutput::ReturnLocal { .. } => {
+                self.last_local_pos = None;
+                None
+            }
+            ShareOutput::Idle | ShareOutput::EnterRemote(_) => None,
+        }
+    }
+}
+
+fn linked_edge(edge: HandoffEdge) -> Edge {
+    match edge {
+        HandoffEdge::Left => Edge::Left,
+        HandoffEdge::Right => Edge::Right,
+        HandoffEdge::Top => Edge::Top,
+        HandoffEdge::Bottom => Edge::Bottom,
+    }
+}
+
+fn normalized_to_default_pixels(x: f64, y: f64) -> (i32, i32) {
+    (
+        (x.clamp(0.0, 1.0) * 1000.0).round() as i32,
+        (y.clamp(0.0, 1.0) * 1000.0).round() as i32,
+    )
+}
+
 pub async fn forward_extended_until_error<C, K, S>(
     capture: &C,
     connection: &K,
@@ -189,7 +297,7 @@ where
     S: FnMut(bool),
 {
     let mut next_id = first_id;
-    let mut share = ExtendedInputShare::new(edge, emergency_stop_keycode);
+    let mut share = LinkedScreenInputShare::single_peer(edge, emergency_stop_keycode);
     loop {
         let event = if share.is_remote() && remote_focus_timeout_millis > 0 {
             match tokio::time::timeout(
@@ -228,6 +336,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn at_handoff_edge(edge: HandoffEdge, x: f64, y: f64) -> bool {
     const EPSILON: f64 = 0.995;
     match edge {
@@ -238,6 +347,7 @@ fn at_handoff_edge(edge: HandoffEdge, x: f64, y: f64) -> bool {
     }
 }
 
+#[cfg(test)]
 fn entry_for_edge(edge: HandoffEdge, x: f64, y: f64) -> (f64, f64) {
     match edge {
         HandoffEdge::Left => (1.0, y.clamp(0.0, 1.0)),
@@ -247,6 +357,7 @@ fn entry_for_edge(edge: HandoffEdge, x: f64, y: f64) -> (f64, f64) {
     }
 }
 
+#[cfg(test)]
 fn returned_to_local(edge: HandoffEdge, x: f64, y: f64) -> bool {
     match edge {
         HandoffEdge::Left => x > 1.0,
@@ -441,6 +552,33 @@ mod tests {
         assert!(share.release_remote());
         assert!(!share.is_remote());
         assert!(!share.release_remote());
+    }
+
+    #[test]
+    fn linked_screen_share_uses_controller_for_entry_motion_and_return() {
+        let mut share = LinkedScreenInputShare::single_peer(HandoffEdge::Right, 41);
+
+        assert_eq!(
+            share.route(InputEvent::PointerMove { x: 0.5, y: 0.5 }),
+            None
+        );
+
+        assert_eq!(
+            share.route(InputEvent::PointerMove { x: 1.0, y: 0.25 }),
+            Some(InputEvent::PointerMove { x: 0.0, y: 0.25 })
+        );
+        assert!(share.is_remote());
+
+        assert_eq!(
+            share.route(InputEvent::RelativeMove { dx: 0.2, dy: 0.1 }),
+            Some(InputEvent::PointerMove { x: 0.2, y: 0.35 })
+        );
+
+        assert_eq!(
+            share.route(InputEvent::RelativeMove { dx: -0.3, dy: 0.0 }),
+            None
+        );
+        assert!(!share.is_remote());
     }
 
     #[derive(Debug)]

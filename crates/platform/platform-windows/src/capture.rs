@@ -7,6 +7,7 @@ use nexkvm_input::{InputCapture, InputError, InputEvent, MouseButton};
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -65,6 +66,15 @@ pub struct CapturedWinInputEvent {
     pub wheel_delta: Option<i32>,
 }
 
+/// Planned handling for one low-level Windows hook event.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaptureAction {
+    /// Event to forward into the NexKVM input stream, if supported.
+    pub forward: Option<InputEvent>,
+    /// Whether the original event should continue to the local OS.
+    pub pass_through: bool,
+}
+
 impl Default for CapturedWinInputEvent {
     fn default() -> Self {
         Self {
@@ -82,6 +92,18 @@ impl Default for CapturedWinInputEvent {
 /// Translate Windows hook fields into the platform-neutral input event.
 #[must_use]
 pub fn plan_capture_event(event: CapturedWinInputEvent) -> Option<InputEvent> {
+    plan_capture_action(event, false).forward
+}
+
+#[must_use]
+pub fn plan_capture_action(event: CapturedWinInputEvent, suppressed: bool) -> CaptureAction {
+    CaptureAction {
+        forward: plan_capture_event_with_mode(event),
+        pass_through: !suppressed,
+    }
+}
+
+fn plan_capture_event_with_mode(event: CapturedWinInputEvent) -> Option<InputEvent> {
     match event.kind {
         WinCaptureEventKind::MouseMove => Some(InputEvent::PointerMove {
             x: normalize_axis(event.x? as f64, event.width? as f64),
@@ -155,15 +177,22 @@ fn scan_to_hid_keycode(scan_code: u32) -> Option<u32> {
 #[derive(Clone)]
 pub struct WindowsInputCapture {
     receiver: Arc<Mutex<Receiver<Result<InputEvent, InputError>>>>,
+    suppressed: Arc<AtomicBool>,
 }
 
 impl WindowsInputCapture {
     /// Start the Win32 low-level hook capture thread.
     #[must_use]
     pub fn new() -> Self {
+        let suppressed = Arc::new(AtomicBool::new(false));
         Self {
-            receiver: start_low_level_hook_capture(),
+            receiver: start_low_level_hook_capture(Arc::clone(&suppressed)),
+            suppressed,
         }
+    }
+
+    pub fn set_suppressed(&self, suppressed: bool) {
+        self.suppressed.store(suppressed, Ordering::SeqCst);
     }
 
     #[cfg(test)]
@@ -174,6 +203,7 @@ impl WindowsInputCapture {
         }
         Self {
             receiver: Arc::new(Mutex::new(receiver)),
+            suppressed: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -206,22 +236,33 @@ impl InputCapture for WindowsInputCapture {
 
 type CaptureResultSender = Sender<Result<InputEvent, InputError>>;
 
-static CAPTURE_SENDER: OnceLock<Mutex<Option<CaptureResultSender>>> = OnceLock::new();
-
-fn capture_sender_slot() -> &'static Mutex<Option<CaptureResultSender>> {
-    CAPTURE_SENDER.get_or_init(|| Mutex::new(None))
+#[derive(Clone)]
+struct CaptureHookState {
+    sender: CaptureResultSender,
+    suppressed: Arc<AtomicBool>,
 }
 
-fn start_low_level_hook_capture() -> Arc<Mutex<Receiver<Result<InputEvent, InputError>>>> {
+static CAPTURE_STATE: OnceLock<Mutex<Option<CaptureHookState>>> = OnceLock::new();
+
+fn capture_state_slot() -> &'static Mutex<Option<CaptureHookState>> {
+    CAPTURE_STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn start_low_level_hook_capture(
+    suppressed: Arc<AtomicBool>,
+) -> Arc<Mutex<Receiver<Result<InputEvent, InputError>>>> {
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || run_low_level_hooks(sender));
+    thread::spawn(move || run_low_level_hooks(sender, suppressed));
     Arc::new(Mutex::new(receiver))
 }
 
-fn run_low_level_hooks(sender: CaptureResultSender) {
-    match capture_sender_slot().lock() {
+fn run_low_level_hooks(sender: CaptureResultSender, suppressed: Arc<AtomicBool>) {
+    match capture_state_slot().lock() {
         Ok(mut slot) => {
-            *slot = Some(sender.clone());
+            *slot = Some(CaptureHookState {
+                sender: sender.clone(),
+                suppressed,
+            });
         }
         Err(_) => {
             let _ = sender.send(Err(InputError::Backend(
@@ -281,7 +322,7 @@ fn message_loop() {
 }
 
 fn clear_capture_sender() {
-    if let Ok(mut slot) = capture_sender_slot().lock() {
+    if let Ok(mut slot) = capture_state_slot().lock() {
         *slot = None;
     }
 }
@@ -292,7 +333,9 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
         // KBDLLHOOKSTRUCT for the duration of this call.
         let data = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
         if let Some(captured) = captured_keyboard_event(wparam as u32, data.scanCode) {
-            send_captured_event(captured);
+            if !send_captured_event(captured) {
+                return 1;
+            }
         }
     }
     // SAFETY: The hook chain must be continued with the original callback args.
@@ -312,7 +355,9 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
         // MSLLHOOKSTRUCT for the duration of this call.
         let data = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
         if let Some(captured) = captured_mouse_event(wparam as u32, data) {
-            send_captured_event(captured);
+            if !send_captured_event(captured) {
+                return 1;
+            }
         }
     }
     // SAFETY: The hook chain must be continued with the original callback args.
@@ -326,16 +371,18 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
     }
 }
 
-fn send_captured_event(captured: CapturedWinInputEvent) {
-    let Some(event) = plan_capture_event(captured) else {
-        return;
+fn send_captured_event(captured: CapturedWinInputEvent) -> bool {
+    let Ok(slot) = capture_state_slot().lock() else {
+        return true;
     };
-    let Ok(slot) = capture_sender_slot().lock() else {
-        return;
+    let Some(state) = slot.as_ref() else {
+        return true;
     };
-    if let Some(sender) = slot.as_ref() {
-        let _ = sender.send(Ok(event));
+    let action = plan_capture_action(captured, state.suppressed.load(Ordering::SeqCst));
+    if let Some(event) = action.forward {
+        let _ = state.sender.send(Ok(event));
     }
+    action.pass_through
 }
 
 fn captured_keyboard_event(message: u32, scan_code: u32) -> Option<CapturedWinInputEvent> {
@@ -449,6 +496,27 @@ mod tests {
             }),
             Some(InputEvent::Scroll { dx: 0.0, dy: 1.0 })
         );
+    }
+
+    #[test]
+    fn suppressed_mouse_move_is_forwarded_and_not_passed_through() {
+        let action = plan_capture_action(
+            CapturedWinInputEvent {
+                kind: WinCaptureEventKind::MouseMove,
+                x: Some(960),
+                y: Some(540),
+                width: Some(1920),
+                height: Some(1080),
+                ..CapturedWinInputEvent::default()
+            },
+            true,
+        );
+
+        assert_eq!(
+            action.forward,
+            Some(InputEvent::PointerMove { x: 0.5, y: 0.5 })
+        );
+        assert!(!action.pass_through);
     }
 
     #[test]
