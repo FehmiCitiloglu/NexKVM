@@ -581,6 +581,25 @@ mod tests {
         assert!(!share.is_remote());
     }
 
+    #[test]
+    fn linked_screen_share_forwards_clicks_while_remote() {
+        let mut share = LinkedScreenInputShare::single_peer(HandoffEdge::Right, 41);
+        assert!(
+            share
+                .route(InputEvent::PointerMove { x: 1.0, y: 0.5 })
+                .is_some()
+        );
+
+        assert_eq!(
+            share.route(InputEvent::ButtonPress(nexkvm_input::MouseButton::Left)),
+            Some(InputEvent::ButtonPress(nexkvm_input::MouseButton::Left))
+        );
+        assert_eq!(
+            share.route(InputEvent::ButtonRelease(nexkvm_input::MouseButton::Left)),
+            Some(InputEvent::ButtonRelease(nexkvm_input::MouseButton::Left))
+        );
+    }
+
     #[derive(Debug)]
     struct QueueCapture {
         events: Mutex<VecDeque<Result<InputEvent, InputError>>>,
@@ -725,6 +744,40 @@ mod tests {
 
         assert!(matches!(error, InputSessionError::EmergencyStop));
         assert!(connection.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn forward_extended_sends_clicks_after_remote_handoff() {
+        let capture = QueueCapture::new(vec![
+            InputEvent::PointerMove { x: 1.0, y: 0.5 },
+            InputEvent::ButtonPress(nexkvm_input::MouseButton::Left),
+            InputEvent::ButtonRelease(nexkvm_input::MouseButton::Left),
+        ]);
+        let connection = Arc::new(MemoryConnection::default());
+
+        let error = forward_extended_until_error(
+            &capture,
+            &*connection,
+            MessageId(40),
+            HandoffEdge::Right,
+            41,
+            3_000,
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, InputSessionError::Codec(_)));
+        let sent = connection.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 3);
+        assert_eq!(
+            decode_input_event(sent[1].clone()).unwrap(),
+            InputEvent::ButtonPress(nexkvm_input::MouseButton::Left)
+        );
+        assert_eq!(
+            decode_input_event(sent[2].clone()).unwrap(),
+            InputEvent::ButtonRelease(nexkvm_input::MouseButton::Left)
+        );
     }
 
     #[tokio::test]

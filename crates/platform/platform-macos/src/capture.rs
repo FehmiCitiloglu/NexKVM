@@ -250,7 +250,7 @@ type CGEventTapCallBack =
 
 const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
-const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
+const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_FIELD_KEYBOARD_EVENT_KEYCODE: u32 = 9;
 const K_CG_MOUSE_EVENT_DELTA_X: u32 = 4;
 const K_CG_MOUSE_EVENT_DELTA_Y: u32 = 5;
@@ -319,7 +319,7 @@ fn run_event_tap(state: CaptureCallbackState) {
         CGEventTapCreate(
             K_CG_SESSION_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
-            K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+            capture_tap_options(),
             mask,
             capture_callback,
             user_info,
@@ -344,6 +344,10 @@ fn run_event_tap(state: CaptureCallbackState) {
         CFRelease(tap.cast());
         CFRunLoopRun();
     }
+}
+
+fn capture_tap_options() -> u32 {
+    K_CG_EVENT_TAP_OPTION_DEFAULT
 }
 
 extern "C" fn capture_callback(
@@ -517,6 +521,28 @@ mod tests {
             Some(InputEvent::RelativeMove { dx: 0.2, dy: -0.1 })
         );
         assert!(!action.pass_through);
+    }
+
+    #[test]
+    fn suppressed_click_is_forwarded_and_not_passed_through() {
+        let action = plan_capture_action(
+            CapturedCgEvent {
+                event_type: CgCaptureEventType::LeftMouseDown,
+                ..CapturedCgEvent::default()
+            },
+            true,
+        );
+
+        assert_eq!(
+            action.forward,
+            Some(InputEvent::ButtonPress(nexkvm_input::MouseButton::Left))
+        );
+        assert!(!action.pass_through);
+    }
+
+    #[test]
+    fn event_tap_is_active_so_suppression_can_drop_local_events() {
+        assert_eq!(capture_tap_options(), 0);
     }
 
     #[tokio::test]
