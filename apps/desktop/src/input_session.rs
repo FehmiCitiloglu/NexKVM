@@ -5,6 +5,8 @@ use nexkvm_protocol::{Envelope, MessageId, MessageKind, PROTOCOL_VERSION};
 
 #[derive(Debug, thiserror::Error)]
 pub enum InputSessionError {
+    #[error("emergency stop requested")]
+    EmergencyStop,
     #[error("input payload codec error: {0}")]
     Codec(String),
     #[error("unexpected message kind: {0:?}")]
@@ -207,6 +209,12 @@ where
         } else {
             capture.next_event().await?
         };
+        if matches!(event, InputEvent::KeyPress(keycode) if keycode == emergency_stop_keycode) {
+            if share.release_remote() {
+                set_suppressed(false);
+            }
+            return Err(InputSessionError::EmergencyStop);
+        }
         let was_remote = share.is_remote();
         let routed = share.route(event);
         let is_remote = share.is_remote();
@@ -558,6 +566,27 @@ mod tests {
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[0].id, MessageId(20));
         assert_eq!(sent[1].id, MessageId(21));
+    }
+
+    #[tokio::test]
+    async fn emergency_key_stops_forwarding_without_sending_event() {
+        let capture = QueueCapture::new(vec![InputEvent::KeyPress(41)]);
+        let connection = Arc::new(MemoryConnection::default());
+
+        let error = forward_extended_until_error(
+            &capture,
+            &*connection,
+            MessageId(30),
+            HandoffEdge::Right,
+            41,
+            3_000,
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, InputSessionError::EmergencyStop));
+        assert!(connection.sent.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

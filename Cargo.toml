@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "apps/desktop",
+    "apps/gui",
     "apps/mobile_future",
     "crates/protocol",
     "crates/core",
@@ -55,6 +56,7 @@ anyhow = "1"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+eframe = { version = "0.29", default-features = true }
 
 # Identity / misc
 uuid = { version = "1", features = ["v4", "serde"] }

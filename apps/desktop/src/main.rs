@@ -254,7 +254,7 @@ fn input_peer_handler(
                     )
                     .await
                     {
-                        tracing::warn!(%error, "input capture forwarding ended");
+                        handle_input_capture_end(error);
                     }
                 });
             }
@@ -300,7 +300,7 @@ fn input_peer_handler(
                     )
                     .await
                     {
-                        tracing::warn!(%error, "Windows input capture forwarding ended");
+                        handle_input_capture_end(error);
                     }
                 });
             }
@@ -312,6 +312,14 @@ fn input_peer_handler(
         let _ = (capture_ready, inject_ready);
         None
     }
+}
+
+fn handle_input_capture_end(error: input_session::InputSessionError) {
+    if matches!(error, input_session::InputSessionError::EmergencyStop) {
+        tracing::warn!("emergency stop requested; exiting nexkvm");
+        std::process::exit(0);
+    }
+    tracing::warn!(%error, "input capture forwarding ended");
 }
 
 fn input_handoff_edge(edge: nexkvm_storage::InputHandoffEdge) -> input_session::HandoffEdge {

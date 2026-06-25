@@ -25,6 +25,8 @@ planned.
   crypto, network, discovery, input, clipboard, streaming, plugins, storage,
   telemetry, and platform crates.
 - [x] Desktop daemon crate and developer CLI entrypoint.
+- [x] Cross-platform native GUI control panel crate for configuration, daemon
+  control, diagnostics, permissions, pairing, and input handoff settings.
 - [x] Future mobile companion placeholder crate for Android and iOS targets.
 - [x] Platform-specific crate boundaries for macOS, Linux, and Windows.
 
