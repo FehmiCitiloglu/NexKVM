@@ -12,6 +12,7 @@ use nexkvm_network::Transport;
 use nexkvm_protocol::{MessageId, PROTOCOL_VERSION, VersionRange};
 use nexkvm_storage::{Config, current_os};
 use nexkvm_telemetry::LogLevel;
+use serde::Deserialize;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tracing::info;
@@ -662,18 +663,154 @@ fn protocol_info() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SimConfig {
+    network: SimNetwork,
+    device: Vec<SimDevice>,
+    features: SimFeatures,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SimNetwork {
+    profile: String,
+    rtt_ms: u64,
+    jitter_ms: u64,
+    loss: f64,
+    throughput_bps: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SimDevice {
+    name: String,
+    os: String,
+    role: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    address: Option<String>,
+    #[serde(default)]
+    trusted: Option<bool>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SimFeatures {
+    clipboard: bool,
+    file_transfer: bool,
+    screen_preview: bool,
+    shared_cursor: bool,
+    plugins: bool,
+}
+
+fn validate_sim_config(config: &SimConfig) -> anyhow::Result<()> {
+    if config.device.is_empty() {
+        anyhow::bail!("simulation config must define at least one [[device]]")
+    }
+
+    let mut seen_names = std::collections::HashSet::new();
+    for device in &config.device {
+        if !seen_names.insert(device.name.as_str()) {
+            anyhow::bail!(
+                "duplicate device name `{}` in simulation config",
+                device.name
+            );
+        }
+        if !matches!(
+            device.os.as_str(),
+            "macos" | "windows" | "linux-wayland" | "linux-x11" | "android" | "ios"
+        ) {
+            anyhow::bail!(
+                "unknown device os `{}` for `{}`; expected one of macos, windows, linux-wayland, linux-x11, android, ios",
+                device.os,
+                device.name
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn simulated_device_id(device: &SimDevice) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"nexkvm simulate device id v1");
+    hasher.update(device.name.as_bytes());
+    hasher.update(device.os.as_bytes());
+    hasher.update(device.address.as_deref().unwrap_or(""));
+    let digest = hasher.finalize();
+    format!(
+        "sim-{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
+}
+
 fn simulate(path: Option<String>) -> anyhow::Result<()> {
     let path = path.unwrap_or_else(|| "tools/sim/local-workspace.toml".into());
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("reading simulation config from {path}"))?;
-    let devices = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with("[[device]]"))
-        .count();
+    let config: SimConfig = toml::from_str(&text)
+        .with_context(|| format!("parsing simulation config TOML from {path}"))?;
+    validate_sim_config(&config)?;
+
     println!("simulation config: {path}");
-    println!("  devices: {devices}");
+    println!(
+        "  network: profile={} rtt={}ms jitter={}ms loss={} throughput={}bps",
+        config.network.profile,
+        config.network.rtt_ms,
+        config.network.jitter_ms,
+        config.network.loss,
+        config.network.throughput_bps,
+    );
+    println!("  devices: {}", config.device.len());
+    for device in &config.device {
+        let id = device
+            .id
+            .clone()
+            .unwrap_or_else(|| simulated_device_id(device));
+        let display_name = device
+            .display_name
+            .clone()
+            .unwrap_or_else(|| device.name.clone());
+        let address = device.address.as_deref().unwrap_or("unassigned");
+        let trust_state = if device.trusted.unwrap_or(false) {
+            "trusted"
+        } else {
+            "untrusted"
+        };
+        println!(
+            "    - id={} display_name={} os={} address={} trust={} role={} pos=({}, {}) size={}x{}",
+            id,
+            display_name,
+            device.os,
+            address,
+            trust_state,
+            device.role,
+            device.x,
+            device.y,
+            device.width,
+            device.height,
+        );
+    }
+    println!(
+        "  features: clipboard={} file_transfer={} screen_preview={} shared_cursor={} plugins={}",
+        config.features.clipboard,
+        config.features.file_transfer,
+        config.features.screen_preview,
+        config.features.shared_cursor,
+        config.features.plugins,
+    );
     println!("  bytes: {}", text.len());
-    println!("  status: valid enough for local sans-IO simulation scaffolding");
+    println!("  status: typed TOML parsed and validated");
     Ok(())
 }
 

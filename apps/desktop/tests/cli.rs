@@ -162,3 +162,214 @@ fn pair_without_uri_fails() {
     let output = nexkvm().arg("pair").output().expect("run nexkvm pair");
     assert!(!output.status.success());
 }
+
+#[test]
+fn simulate_reports_typed_summary() {
+    let config_home = temp_config_home("simulate-ok");
+    let sim_path = config_home.join("sim.toml");
+    std::fs::write(
+        &sim_path,
+        r#"
+[network]
+profile = "lan"
+rtt_ms = 8
+jitter_ms = 1
+loss = 0.0
+throughput_bps = 100000000
+
+[[device]]
+name = "desk-macos"
+os = "macos"
+role = "server"
+id = "sim-desk"
+display_name = "Desk Mac"
+address = "192.168.1.20:47654"
+trusted = true
+x = 0
+y = 0
+width = 1728
+height = 1117
+
+[[device]]
+name = "laptop-linux"
+os = "linux-wayland"
+role = "client"
+display_name = "Laptop Linux"
+address = "192.168.1.25:47654"
+trusted = false
+x = 1728
+y = 0
+width = 1920
+height = 1080
+
+[features]
+clipboard = true
+file_transfer = true
+screen_preview = true
+shared_cursor = true
+plugins = false
+"#,
+    )
+    .expect("write simulation config");
+
+    let output = nexkvm()
+        .arg("simulate")
+        .arg(sim_path)
+        .output()
+        .expect("run nexkvm simulate");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("devices: 2"));
+    assert!(stdout.contains(
+        "id=sim-desk display_name=Desk Mac os=macos address=192.168.1.20:47654 trust=trusted"
+    ));
+    assert!(stdout.contains(
+        "display_name=Laptop Linux os=linux-wayland address=192.168.1.25:47654 trust=untrusted"
+    ));
+    assert!(stdout.contains("status: typed TOML parsed and validated"));
+}
+
+#[test]
+fn simulate_device_identity_fields_fallback_when_omitted() {
+    let config_home = temp_config_home("simulate-fallback");
+    let sim_path = config_home.join("sim.toml");
+    std::fs::write(
+        &sim_path,
+        r#"
+[network]
+profile = "lan"
+rtt_ms = 8
+jitter_ms = 1
+loss = 0.0
+throughput_bps = 100000000
+
+[[device]]
+name = "tablet-future"
+os = "android"
+role = "client"
+x = -1200
+y = 100
+width = 1200
+height = 800
+
+[features]
+clipboard = true
+file_transfer = true
+screen_preview = true
+shared_cursor = true
+plugins = false
+"#,
+    )
+    .expect("write simulation config");
+
+    let output = nexkvm()
+        .arg("simulate")
+        .arg(sim_path)
+        .output()
+        .expect("run nexkvm simulate");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("display_name=tablet-future os=android address=unassigned trust=untrusted")
+    );
+    assert!(stdout.contains("id=sim-"));
+}
+
+#[test]
+fn simulate_rejects_duplicate_device_names() {
+    let config_home = temp_config_home("simulate-duplicate");
+    let sim_path = config_home.join("sim.toml");
+    std::fs::write(
+        &sim_path,
+        r#"
+[network]
+profile = "lan"
+rtt_ms = 8
+jitter_ms = 1
+loss = 0.0
+throughput_bps = 100000000
+
+[[device]]
+name = "duplicate"
+os = "macos"
+role = "server"
+x = 0
+y = 0
+width = 1728
+height = 1117
+
+[[device]]
+name = "duplicate"
+os = "windows"
+role = "client"
+x = 1728
+y = 0
+width = 1920
+height = 1080
+
+[features]
+clipboard = true
+file_transfer = true
+screen_preview = true
+shared_cursor = true
+plugins = false
+"#,
+    )
+    .expect("write simulation config");
+
+    let output = nexkvm()
+        .arg("simulate")
+        .arg(sim_path)
+        .output()
+        .expect("run nexkvm simulate");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("duplicate device name `duplicate`"));
+}
+
+#[test]
+fn simulate_rejects_unknown_device_os() {
+    let config_home = temp_config_home("simulate-unknown-os");
+    let sim_path = config_home.join("sim.toml");
+    std::fs::write(
+        &sim_path,
+        r#"
+[network]
+profile = "lan"
+rtt_ms = 8
+jitter_ms = 1
+loss = 0.0
+throughput_bps = 100000000
+
+[[device]]
+name = "strange-box"
+os = "beos"
+role = "server"
+x = 0
+y = 0
+width = 1728
+height = 1117
+
+[features]
+clipboard = true
+file_transfer = true
+screen_preview = true
+shared_cursor = true
+plugins = false
+"#,
+    )
+    .expect("write simulation config");
+
+    let output = nexkvm()
+        .arg("simulate")
+        .arg(sim_path)
+        .output()
+        .expect("run nexkvm simulate");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown device os `beos`"));
+}

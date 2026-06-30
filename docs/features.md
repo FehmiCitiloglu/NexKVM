@@ -357,13 +357,13 @@ planned.
 
 ### Simulation And Developer Experience
 
-- [ ] Typed TOML parsing for `nexkvm simulate`.
-- [ ] Simulation validation for empty, duplicated, malformed, or unknown devices.
-- [ ] Simulation output with device ID, display name, OS, address, and trust
+- [x] Typed TOML parsing for `nexkvm simulate`.
+- [x] Simulation validation for empty, duplicated, malformed, or unknown devices.
+- [x] Simulation output with device ID, display name, OS, address, and trust
   state.
 - [ ] Simulation connection planning for direct LAN, reconnect candidate,
   missing trust, and invalid configuration.
-- [ ] Stable integration test for simulation report output.
+- [x] Stable integration test for simulation report output.
 - [ ] Feed simulation data into discovery, latency, workspace, screen, and
   collaboration simulators.
 
