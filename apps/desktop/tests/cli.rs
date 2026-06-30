@@ -227,6 +227,17 @@ plugins = false
     assert!(stdout.contains(
         "display_name=Laptop Linux os=linux-wayland address=192.168.1.25:47654 trust=untrusted"
     ));
+    assert!(stdout.contains("connection planning:"));
+    assert!(stdout.contains("Desk Mac: direct-lan (connect directly to 192.168.1.20:47654)"));
+    assert!(stdout.contains("Laptop Linux: missing-trust (device is not trusted)"));
+    assert!(stdout.contains("simulators:"));
+    assert!(stdout.contains("discovery: ranked=2"));
+    assert!(stdout.contains("latency: smoothed="));
+    assert!(stdout.contains("workspace: snap_right target=Laptop Linux cross_device=true"));
+    assert!(stdout.contains("screen: codec="));
+    assert!(
+        stdout.contains("collaboration: participants=2 pending_requests=0 control_active=true")
+    );
     assert!(stdout.contains("status: typed TOML parsed and validated"));
 }
 
@@ -275,6 +286,74 @@ plugins = false
         stdout.contains("display_name=tablet-future os=android address=unassigned trust=untrusted")
     );
     assert!(stdout.contains("id=sim-"));
+    assert!(stdout.contains("tablet-future: missing-trust (device is not trusted)"));
+    assert!(stdout.contains("discovery: ranked=1"));
+    assert!(stdout.contains("workspace: snap_right target=tablet-future cross_device=false"));
+    assert!(stdout.contains("screen: unavailable (need at least 2 devices)"));
+    assert!(stdout.contains("collaboration: unavailable (need at least 2 devices)"));
+}
+
+#[test]
+fn simulate_connection_planning_reports_reconnect_and_invalid_configuration() {
+    let config_home = temp_config_home("simulate-connection-planning");
+    let sim_path = config_home.join("sim.toml");
+    std::fs::write(
+        &sim_path,
+        r#"
+[network]
+profile = "lan"
+rtt_ms = 8
+jitter_ms = 1
+loss = 0.0
+throughput_bps = 100000000
+
+[[device]]
+name = "trusted-no-address"
+os = "macos"
+role = "server"
+display_name = "Trusted No Address"
+trusted = true
+x = 0
+y = 0
+width = 1728
+height = 1117
+
+[[device]]
+name = "trusted-invalid-address"
+os = "windows"
+role = "client"
+display_name = "Trusted Invalid Address"
+address = "not-a-socket"
+trusted = true
+x = 1728
+y = 0
+width = 1920
+height = 1080
+
+[features]
+clipboard = true
+file_transfer = true
+screen_preview = true
+shared_cursor = true
+plugins = false
+"#,
+    )
+    .expect("write simulation config");
+
+    let output = nexkvm()
+        .arg("simulate")
+        .arg(sim_path)
+        .output()
+        .expect("run nexkvm simulate");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(
+        "Trusted No Address: reconnect-candidate (trusted device without address; wait for discovery)"
+    ));
+    assert!(stdout.contains(
+        "Trusted Invalid Address: invalid-configuration (invalid address `not-a-socket` (expected ip:port))"
+    ));
 }
 
 #[test]

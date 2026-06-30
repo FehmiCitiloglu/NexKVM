@@ -361,10 +361,10 @@ planned.
 - [x] Simulation validation for empty, duplicated, malformed, or unknown devices.
 - [x] Simulation output with device ID, display name, OS, address, and trust
   state.
-- [ ] Simulation connection planning for direct LAN, reconnect candidate,
+- [x] Simulation connection planning for direct LAN, reconnect candidate,
   missing trust, and invalid configuration.
 - [x] Stable integration test for simulation report output.
-- [ ] Feed simulation data into discovery, latency, workspace, screen, and
+- [x] Feed simulation data into discovery, latency, workspace, screen, and
   collaboration simulators.
 
 ### Release Readiness

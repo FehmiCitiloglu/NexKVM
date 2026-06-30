@@ -754,6 +754,308 @@ fn simulated_device_id(device: &SimDevice) -> String {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SimConnectionPlanKind {
+    DirectLan,
+    ReconnectCandidate,
+    MissingTrust,
+    InvalidConfiguration,
+}
+
+impl SimConnectionPlanKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::DirectLan => "direct-lan",
+            Self::ReconnectCandidate => "reconnect-candidate",
+            Self::MissingTrust => "missing-trust",
+            Self::InvalidConfiguration => "invalid-configuration",
+        }
+    }
+}
+
+struct SimConnectionPlanEntry<'a> {
+    device: &'a SimDevice,
+    kind: SimConnectionPlanKind,
+    detail: String,
+}
+
+fn build_connection_plan<'a>(device: &'a SimDevice) -> SimConnectionPlanEntry<'a> {
+    if !matches!(device.role.as_str(), "server" | "client") {
+        return SimConnectionPlanEntry {
+            device,
+            kind: SimConnectionPlanKind::InvalidConfiguration,
+            detail: format!("unsupported role `{}`", device.role),
+        };
+    }
+
+    if let Some(address) = device.address.as_deref() {
+        if address.parse::<SocketAddr>().is_err() {
+            return SimConnectionPlanEntry {
+                device,
+                kind: SimConnectionPlanKind::InvalidConfiguration,
+                detail: format!("invalid address `{address}` (expected ip:port)"),
+            };
+        }
+    }
+
+    if !device.trusted.unwrap_or(false) {
+        return SimConnectionPlanEntry {
+            device,
+            kind: SimConnectionPlanKind::MissingTrust,
+            detail: "device is not trusted".to_string(),
+        };
+    }
+
+    if let Some(address) = device.address.as_deref() {
+        return SimConnectionPlanEntry {
+            device,
+            kind: SimConnectionPlanKind::DirectLan,
+            detail: format!("connect directly to {address}"),
+        };
+    }
+
+    SimConnectionPlanEntry {
+        device,
+        kind: SimConnectionPlanKind::ReconnectCandidate,
+        detail: "trusted device without address; wait for discovery".to_string(),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SimRuntimeDevice {
+    id: nexkvm_core::DeviceId,
+    name: String,
+    address: Option<SocketAddr>,
+    trusted: bool,
+    bounds: nexkvm_core::WorkspaceRect,
+}
+
+fn build_runtime_devices(config: &SimConfig) -> Vec<SimRuntimeDevice> {
+    config
+        .device
+        .iter()
+        .map(|device| SimRuntimeDevice {
+            id: nexkvm_core::DeviceId::generate(),
+            name: device
+                .display_name
+                .clone()
+                .unwrap_or_else(|| device.name.clone()),
+            address: device
+                .address
+                .as_deref()
+                .and_then(|address| address.parse::<SocketAddr>().ok()),
+            trusted: device.trusted.unwrap_or(false),
+            bounds: nexkvm_core::WorkspaceRect::new(
+                device.x,
+                device.y,
+                device.width,
+                device.height,
+            ),
+        })
+        .collect()
+}
+
+fn print_simulator_report(runtime_devices: &[SimRuntimeDevice], network: &SimNetwork) {
+    println!("  simulators:");
+    print_discovery_simulator(runtime_devices);
+    print_latency_simulator(network);
+    print_workspace_simulator(runtime_devices);
+    print_screen_simulator(runtime_devices);
+    print_collaboration_simulator(runtime_devices);
+}
+
+fn print_discovery_simulator(runtime_devices: &[SimRuntimeDevice]) {
+    use nexkvm_discovery::{
+        PresencePolicy, PresenceTracker, ProximityObservation, ProximitySignalKind,
+    };
+
+    let mut tracker = PresenceTracker::new(PresencePolicy::lan_default());
+    let now_millis = 1_000;
+    for device in runtime_devices {
+        let mut confidence: f64 = if device.trusted { 0.85 } else { 0.35 };
+        if device.address.is_none() {
+            confidence = (confidence - 0.2_f64).max(0.05_f64);
+        }
+        tracker.observe(ProximityObservation::new(
+            device.id,
+            ProximitySignalKind::LanHeartbeat,
+            confidence,
+            now_millis,
+        ));
+        if device.trusted {
+            tracker.observe(ProximityObservation::new(
+                device.id,
+                ProximitySignalKind::PresenceHint,
+                0.9,
+                now_millis,
+            ));
+        }
+    }
+
+    let ranked = tracker.ranked(now_millis);
+    let best_active = tracker
+        .best_active(now_millis)
+        .and_then(|id| runtime_devices.iter().find(|device| device.id == id))
+        .map(|device| device.name.clone())
+        .unwrap_or_else(|| "none".to_string());
+
+    println!(
+        "    - discovery: ranked={} best_active={}",
+        ranked.len(),
+        best_active
+    );
+}
+
+fn print_latency_simulator(network: &SimNetwork) {
+    use nexkvm_network::RttTracker;
+
+    let mut tracker = RttTracker::default();
+    let base = network.rtt_ms.max(1);
+    let jitter = network.jitter_ms;
+    let low = base.saturating_sub(jitter).max(1);
+    let high = base.saturating_add(jitter).max(1);
+    tracker.record(std::time::Duration::from_millis(low));
+    tracker.record(std::time::Duration::from_millis(base));
+    tracker.record(std::time::Duration::from_millis(high));
+
+    let smoothed = tracker.smoothed().unwrap_or_default().as_millis();
+    let estimated_jitter = tracker.jitter().unwrap_or_default().as_millis();
+    let timeout = tracker
+        .timeout(std::time::Duration::from_millis(250))
+        .as_millis();
+
+    println!(
+        "    - latency: smoothed={}ms jitter={}ms timeout={}ms",
+        smoothed, estimated_jitter, timeout,
+    );
+}
+
+fn print_workspace_simulator(runtime_devices: &[SimRuntimeDevice]) {
+    use nexkvm_core::{
+        SnapDirection, UnifiedVirtualDesktop, WindowId, WindowSnapshot, WorkspaceDevice,
+        plan_window_snap,
+    };
+
+    let mut desktop = UnifiedVirtualDesktop::new();
+    for device in runtime_devices {
+        desktop.upsert(
+            WorkspaceDevice::new(device.id, device.name.clone(), device.bounds).with_online(true),
+        );
+    }
+
+    if runtime_devices.is_empty() {
+        println!("    - workspace: no devices");
+        return;
+    }
+
+    let source = &runtime_devices[0];
+    let window = WindowSnapshot {
+        id: WindowId::new("sim-window-main"),
+        device: source.id,
+        title: "Simulation Window".to_string(),
+        app_id: None,
+        bounds: source.bounds,
+        visible: true,
+    };
+
+    match plan_window_snap(&desktop, &window, SnapDirection::Right) {
+        Ok(plan) => {
+            let target = runtime_devices
+                .iter()
+                .find(|device| device.id == plan.to)
+                .map(|device| device.name.as_str())
+                .unwrap_or("unknown");
+            println!(
+                "    - workspace: snap_right target={} cross_device={}",
+                target, plan.cross_device
+            );
+        }
+        Err(error) => println!("    - workspace: unavailable ({error})"),
+    }
+}
+
+fn print_screen_simulator(runtime_devices: &[SimRuntimeDevice]) {
+    use nexkvm_streaming::{
+        CaptureSource, CaptureSourceId, ScreenStreamCapabilities, ScreenStreamRequest,
+        negotiate_screen_stream,
+    };
+
+    if runtime_devices.len() < 2 {
+        println!("    - screen: unavailable (need at least 2 devices)");
+        return;
+    }
+
+    let sender = &runtime_devices[0];
+    let receiver = &runtime_devices[1];
+    let request = ScreenStreamRequest::interactive(
+        sender.id,
+        receiver.id,
+        CaptureSource::Display {
+            id: CaptureSourceId::new("sim-display-0"),
+            label: sender.name.clone(),
+        },
+    );
+
+    match negotiate_screen_stream(
+        &ScreenStreamCapabilities::software_h264(),
+        &ScreenStreamCapabilities::software_h264(),
+        request,
+    ) {
+        Ok(plan) => println!(
+            "    - screen: codec={:?} fps={} resolution={}x{} encrypted={}",
+            plan.codec,
+            plan.fps,
+            plan.resolution.width,
+            plan.resolution.height,
+            plan.requires_encrypted_transport
+        ),
+        Err(error) => println!("    - screen: unavailable ({error})"),
+    }
+}
+
+fn print_collaboration_simulator(runtime_devices: &[SimRuntimeDevice]) {
+    use nexkvm_core::{
+        CollaborationMode, CollaborationParticipant, CollaborationSession, ParticipantRole,
+    };
+
+    if runtime_devices.len() < 2 {
+        println!("    - collaboration: unavailable (need at least 2 devices)");
+        return;
+    }
+
+    let host = CollaborationParticipant::new(
+        runtime_devices[0].id,
+        runtime_devices[0].name.clone(),
+        ParticipantRole::Host,
+    );
+    let host_id = host.id;
+    let peer = CollaborationParticipant::new(
+        runtime_devices[1].id,
+        runtime_devices[1].name.clone(),
+        ParticipantRole::Driver,
+    );
+    let peer_id = peer.id;
+
+    let mut session = CollaborationSession::new(host, CollaborationMode::PairProgramming);
+    let result = (|| -> Result<(), nexkvm_core::CollaborationError> {
+        session.join(peer)?;
+        let _ = session.request_control(peer_id, runtime_devices[0].id, 1_000)?;
+        let _ =
+            session.grant_control(host_id, peer_id, runtime_devices[0].id, 1_000, Some(30_000))?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => println!(
+            "    - collaboration: participants={} pending_requests={} control_active={}",
+            session.participants().len(),
+            session.pending_requests().len(),
+            session.can_control(peer_id, runtime_devices[0].id, 1_001)
+        ),
+        Err(error) => println!("    - collaboration: unavailable ({error})"),
+    }
+}
+
 fn simulate(path: Option<String>) -> anyhow::Result<()> {
     let path = path.unwrap_or_else(|| "tools/sim/local-workspace.toml".into());
     let text = std::fs::read_to_string(&path)
@@ -772,7 +1074,9 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
         config.network.throughput_bps,
     );
     println!("  devices: {}", config.device.len());
+    let mut plans = Vec::with_capacity(config.device.len());
     for device in &config.device {
+        plans.push(build_connection_plan(device));
         let id = device
             .id
             .clone()
@@ -801,6 +1105,20 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
             device.height,
         );
     }
+    println!("  connection planning:");
+    for plan in &plans {
+        let display_name = plan
+            .device
+            .display_name
+            .as_deref()
+            .unwrap_or(plan.device.name.as_str());
+        println!(
+            "    - {}: {} ({})",
+            display_name,
+            plan.kind.label(),
+            plan.detail
+        );
+    }
     println!(
         "  features: clipboard={} file_transfer={} screen_preview={} shared_cursor={} plugins={}",
         config.features.clipboard,
@@ -809,6 +1127,8 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
         config.features.shared_cursor,
         config.features.plugins,
     );
+    let runtime_devices = build_runtime_devices(&config);
+    print_simulator_report(&runtime_devices, &config.network);
     println!("  bytes: {}", text.len());
     println!("  status: typed TOML parsed and validated");
     Ok(())
