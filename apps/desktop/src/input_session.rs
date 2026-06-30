@@ -625,6 +625,26 @@ mod tests {
     }
 
     #[derive(Debug, Default)]
+    struct TimeoutThenErrorCapture {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl InputCapture for TimeoutThenErrorCapture {
+        async fn next_event(&self) -> Result<InputEvent, InputError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match call {
+                0 => Ok(InputEvent::PointerMove { x: 1.0, y: 0.5 }),
+                1 => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    Err(InputError::Backend("capture delayed error".into()))
+                }
+                _ => Err(InputError::Backend("capture finished".into())),
+            }
+        }
+    }
+
+    #[derive(Debug, Default)]
     struct RecordingInjector {
         events: Mutex<Vec<InputEvent>>,
     }
@@ -778,6 +798,29 @@ mod tests {
             decode_input_event(sent[2].clone()).unwrap(),
             InputEvent::ButtonRelease(nexkvm_input::MouseButton::Left)
         );
+    }
+
+    #[tokio::test]
+    async fn forward_extended_toggles_suppression_on_handoff_and_timeout_release() {
+        let capture = TimeoutThenErrorCapture::default();
+        let connection = Arc::new(MemoryConnection::default());
+        let suppressions = Arc::new(Mutex::new(Vec::new()));
+        let suppressions_for_callback = Arc::clone(&suppressions);
+
+        let error = forward_extended_until_error(
+            &capture,
+            &*connection,
+            MessageId(50),
+            HandoffEdge::Right,
+            41,
+            5,
+            move |suppressed| suppressions_for_callback.lock().unwrap().push(suppressed),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, InputSessionError::Codec(_)));
+        assert_eq!(suppressions.lock().unwrap().as_slice(), &[true, false]);
     }
 
     #[tokio::test]

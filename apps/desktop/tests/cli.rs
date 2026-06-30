@@ -12,14 +12,16 @@ fn nexkvm() -> Command {
 }
 
 fn extract_simulation_report(stdout: &str) -> serde_json::Value {
-    let report_line = stdout
+    if let Some(report_line) = stdout
         .lines()
         .find(|line| line.trim_start().starts_with("simulation_report_json: "))
-        .expect("simulation_report_json line");
-    let json = report_line
-        .trim_start()
-        .trim_start_matches("simulation_report_json: ");
-    serde_json::from_str(json).expect("valid simulation_report_json")
+    {
+        let json = report_line
+            .trim_start()
+            .trim_start_matches("simulation_report_json: ");
+        return serde_json::from_str(json).expect("valid simulation_report_json");
+    }
+    serde_json::from_str(stdout.trim()).expect("valid simulation_report_json")
 }
 
 fn temp_config_home(name: &str) -> std::path::PathBuf {
@@ -389,6 +391,77 @@ plugins = false
     assert!(stdout.contains(
         "Trusted Invalid Address: invalid-configuration (invalid address `not-a-socket` (expected ip:port))"
     ));
+}
+
+#[test]
+fn simulate_json_only_outputs_machine_readable_report_only() {
+    let config_home = temp_config_home("simulate-json-only");
+    let sim_path = config_home.join("sim.toml");
+    std::fs::write(
+        &sim_path,
+        r#"
+[network]
+profile = "lan"
+rtt_ms = 8
+jitter_ms = 1
+loss = 0.0
+throughput_bps = 100000000
+
+[[device]]
+name = "desk-macos"
+os = "macos"
+role = "server"
+display_name = "Desk Mac"
+address = "192.168.1.20:47654"
+trusted = true
+x = 0
+y = 0
+width = 1728
+height = 1117
+
+[[device]]
+name = "laptop-linux"
+os = "linux-wayland"
+role = "client"
+display_name = "Laptop Linux"
+address = "192.168.1.25:47654"
+trusted = true
+x = 1728
+y = 0
+width = 1920
+height = 1080
+
+[features]
+clipboard = true
+file_transfer = true
+screen_preview = true
+shared_cursor = true
+plugins = false
+"#,
+    )
+    .expect("write simulation config");
+
+    let output = nexkvm()
+        .arg("simulate")
+        .arg("--simulate-json-only")
+        .arg(sim_path)
+        .output()
+        .expect("run nexkvm simulate --simulate-json-only");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("simulation config:"));
+    assert!(!stdout.contains("simulation_report_json:"));
+
+    let report = extract_simulation_report(&stdout);
+    assert_eq!(
+        report["simulators"]["workspace"]["status"].as_str(),
+        Some("ok")
+    );
+    assert_eq!(
+        report["simulators"]["screen"]["status"].as_str(),
+        Some("ok")
+    );
 }
 
 #[test]

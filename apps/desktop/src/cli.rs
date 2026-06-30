@@ -41,6 +41,8 @@ pub enum Command {
     Simulate {
         /// Optional path to the simulation TOML.
         path: Option<String>,
+        /// Emit only machine-readable JSON output.
+        json_only: bool,
     },
     /// Print CLI usage.
     Help,
@@ -97,7 +99,7 @@ where
             }
             Command::PairingUri { addr }
         }
-        Some("simulate") => Command::Simulate { path: it.next() },
+        Some("simulate") => parse_simulate_args(it)?,
         Some("help" | "--help" | "-h") => Command::Help,
         Some(other) => return Err(format!("unknown command `{other}`; run `nexkvm help`")),
     };
@@ -124,6 +126,26 @@ where
     Ok(Command::Pair { uri, accept })
 }
 
+fn parse_simulate_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut json_only = false;
+    let mut path = None;
+    for arg in args {
+        if arg == "--simulate-json-only" || arg == "--json-only" {
+            json_only = true;
+        } else if path.is_none() {
+            path = Some(arg);
+        } else {
+            return Err(
+                "simulate accepts at most one path plus optional --simulate-json-only".to_string(),
+            );
+        }
+    }
+    Ok(Command::Simulate { path, json_only })
+}
+
 /// Render the CLI usage text.
 #[must_use]
 pub fn help_text() -> String {
@@ -138,7 +160,9 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
-    out.push_str("  nexkvm simulate [toml]     Validate a local simulation config\n");
+    out.push_str(
+        "  nexkvm simulate [--simulate-json-only] [toml] Validate a local simulation config\n",
+    );
     out.push_str("\nFLAGS:\n");
     out.push_str("  --debug                   Raise log verbosity to debug\n");
     out
@@ -323,14 +347,39 @@ mod tests {
     fn simulate_takes_optional_path() {
         assert_eq!(
             parse(["simulate"]).unwrap().command,
-            Command::Simulate { path: None }
+            Command::Simulate {
+                path: None,
+                json_only: false,
+            }
         );
         assert_eq!(
             parse(["simulate", "a.toml"]).unwrap().command,
             Command::Simulate {
-                path: Some("a.toml".into())
+                path: Some("a.toml".into()),
+                json_only: false,
             }
         );
+    }
+
+    #[test]
+    fn simulate_json_only_flag_is_supported() {
+        assert_eq!(
+            parse(["simulate", "--simulate-json-only"]).unwrap().command,
+            Command::Simulate {
+                path: None,
+                json_only: true,
+            }
+        );
+        assert_eq!(
+            parse(["simulate", "--json-only", "a.toml"])
+                .unwrap()
+                .command,
+            Command::Simulate {
+                path: Some("a.toml".into()),
+                json_only: true,
+            }
+        );
+        assert!(parse(["simulate", "a.toml", "b.toml"]).is_err());
     }
 
     #[test]

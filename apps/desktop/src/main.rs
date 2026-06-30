@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Devices => return list_devices(),
         Command::Pair { uri, accept } => return pair(&uri, accept),
         Command::PairingUri { addr } => return pairing_uri(&addr),
-        Command::Simulate { path } => return simulate(path),
+        Command::Simulate { path, json_only } => return simulate(path, json_only),
         Command::Help => {
             print!("{}", cli::help_text());
             return Ok(());
@@ -1336,13 +1336,26 @@ fn build_simulation_report_json(
     })
 }
 
-fn simulate(path: Option<String>) -> anyhow::Result<()> {
+fn simulate(path: Option<String>, json_only: bool) -> anyhow::Result<()> {
     let path = path.unwrap_or_else(|| "tools/sim/local-workspace.toml".into());
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("reading simulation config from {path}"))?;
     let config: SimConfig = toml::from_str(&text)
         .with_context(|| format!("parsing simulation config TOML from {path}"))?;
     validate_sim_config(&config)?;
+
+    let runtime_devices = build_runtime_devices(&config);
+    let plans = config
+        .device
+        .iter()
+        .map(build_connection_plan)
+        .collect::<Vec<_>>();
+    let machine_report = build_simulation_report_json(&config, &plans, &runtime_devices);
+
+    if json_only {
+        println!("{machine_report}");
+        return Ok(());
+    }
 
     println!("simulation config: {path}");
     println!(
@@ -1354,9 +1367,7 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
         config.network.throughput_bps,
     );
     println!("  devices: {}", config.device.len());
-    let mut plans = Vec::with_capacity(config.device.len());
     for device in &config.device {
-        plans.push(build_connection_plan(device));
         let id = device
             .id
             .clone()
@@ -1407,9 +1418,7 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
         config.features.shared_cursor,
         config.features.plugins,
     );
-    let runtime_devices = build_runtime_devices(&config);
     print_simulator_report(&runtime_devices, &config.network);
-    let machine_report = build_simulation_report_json(&config, &plans, &runtime_devices);
     println!("  simulation_report_json: {}", machine_report);
     println!("  bytes: {}", text.len());
     println!("  status: typed TOML parsed and validated");

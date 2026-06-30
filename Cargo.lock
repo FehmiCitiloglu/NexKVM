@@ -2335,6 +2335,7 @@ name = "nexkvm-platform-macos"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "nexkvm-clipboard",
  "nexkvm-core",
  "nexkvm-input",
  "tokio",
