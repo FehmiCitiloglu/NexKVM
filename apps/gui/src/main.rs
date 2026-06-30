@@ -1,6 +1,9 @@
 use std::fs::OpenOptions;
+use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use eframe::egui;
 use nexkvm_storage::{Config, InputControlRole, InputHandoffEdge};
@@ -93,6 +96,21 @@ impl NexkvmGui {
         if !self.persist_config() {
             return;
         }
+        let listen_port = self.config.network.listen_port;
+        if !daemon_listen_port_available(listen_port) {
+            self.status = format!("Port {listen_port} is busy; stopping existing nexkvm daemon...");
+            if let Err(error) = kill_existing_daemon_process() {
+                self.status =
+                    format!("Port {listen_port} is busy and nexkvm could not be stopped: {error}");
+                return;
+            }
+            if !wait_for_daemon_listen_port_available(listen_port) {
+                self.status = format!(
+                    "Port {listen_port} is still busy after stopping nexkvm; daemon not started"
+                );
+                return;
+            }
+        }
         let log_file = match OpenOptions::new()
             .create(true)
             .append(true)
@@ -132,13 +150,7 @@ impl NexkvmGui {
             self.status = "Daemon stopped".into();
             return;
         }
-        #[cfg(unix)]
-        let output = Command::new("pkill").args(["-9", "-x", "nexkvm"]).output();
-        #[cfg(windows)]
-        let output = Command::new("taskkill")
-            .args(["/IM", "nexkvm.exe", "/F"])
-            .output();
-        match output {
+        match run_daemon_kill_command() {
             Ok(output) if output.status.success() => self.status = "Daemon stopped".into(),
             Ok(output) => {
                 self.status = format!("Stop command exited: {}", output.status);
@@ -1180,6 +1192,116 @@ fn read_log_tail(path: &std::path::Path, max_bytes: usize) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DaemonKillCommandPlan {
+    program: &'static str,
+    args: &'static [&'static str],
+}
+
+fn daemon_kill_command_plan() -> DaemonKillCommandPlan {
+    #[cfg(unix)]
+    {
+        DaemonKillCommandPlan {
+            program: "pkill",
+            args: &["-9", "-x", "nexkvm"],
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        DaemonKillCommandPlan {
+            program: "taskkill",
+            args: &["/IM", "nexkvm.exe", "/F"],
+        }
+    }
+}
+
+fn run_daemon_kill_command() -> std::io::Result<Output> {
+    let command = daemon_kill_command_plan();
+    Command::new(command.program).args(command.args).output()
+}
+
+fn kill_existing_daemon_process() -> Result<(), String> {
+    match run_daemon_kill_command() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(format!(
+            "kill command exited with {}; {}",
+            output.status,
+            command_output_summary(&output)
+        )),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn command_output_summary(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => "no command output".into(),
+        (false, true) => format!("stdout: {stdout}"),
+        (true, false) => format!("stderr: {stderr}"),
+        (false, false) => format!("stdout: {stdout}; stderr: {stderr}"),
+    }
+}
+
+fn daemon_listen_port_available(port: u16) -> bool {
+    tcp_port_available(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
+}
+
+fn wait_for_daemon_listen_port_available(port: u16) -> bool {
+    for _ in 0..12 {
+        if daemon_listen_port_available(port) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+    false
+}
+
+fn tcp_port_available(addr: SocketAddr) -> bool {
+    TcpListener::bind(addr).is_ok()
+}
+
 fn local_pairing_addr() -> String {
     "127.0.0.1:47654".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+
+    #[test]
+    fn kill_command_targets_only_daemon_process() {
+        let command = daemon_kill_command_plan();
+
+        #[cfg(unix)]
+        {
+            assert_eq!(command.program, "pkill");
+            assert_eq!(command.args, ["-9", "-x", "nexkvm"]);
+        }
+
+        #[cfg(windows)]
+        {
+            assert_eq!(command.program, "taskkill");
+            assert_eq!(command.args, ["/IM", "nexkvm.exe", "/F"]);
+        }
+    }
+
+    #[test]
+    fn occupied_tcp_port_is_not_available() {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        assert!(!tcp_port_available(addr));
+    }
+
+    #[test]
+    fn tcp_port_becomes_available_after_listener_drops() {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        assert!(tcp_port_available(addr));
+    }
 }
