@@ -279,8 +279,8 @@ planned.
 - [x] macOS clipboard backend (MVP text read/write via pbpaste/pbcopy; daemon runtime integration complete; encode/decode transport layer complete; remote updates applied via Clipboard::write(); multi-format NSPasteboard FFI support for text, HTML, RTF, and images implemented).
 - [x] Windows clipboard backend (MVP text read/write via native Clipboard API; UTF-8 encoding; daemon runtime integration complete; supports CF_UNICODETEXT, CF_DIB, CF_HDROP format mapping).
 - [x] Linux clipboard backend (MVP text read/write via arboard; unified X11/Wayland support; daemon runtime integration complete).
-- [x] macOS screen capture using CoreGraphics CGDisplayCreateImage (MVP synchronous frame capture; display enumeration via NSScreen FFI; ScreenCaptureBackend trait impl with capabilities reporting, permission stubs, source listing, and monotonic frame sequence numbering; BGRA8 pixel format with System memory backend; spawn_blocking async integration; 2 unit tests passing).
-- [ ] macOS media encoding through VideoToolbox.
+- [x] macOS screen capture using CoreGraphics CGDisplayCreateImage and window capture paths (MVP synchronous frame capture for display/window/application sources; display enumeration via NSScreen FFI; Window/Application source enumeration via CGWindowListCopyWindowInfo; ScreenCaptureBackend trait impl with ScreenCaptureKit availability gating, screen-recording permission request integration, source listing, and monotonic frame sequence numbering; BGRA8 pixel format with System memory backend; spawn_blocking async integration; 2 unit tests passing).
+- [~] macOS media encoding through VideoToolbox (trait-level encoder adapter wired as `MacosVideoToolboxEncoder`; H.264/H.265 compression session wiring pending).
 - [ ] Linux Wayland portal-mediated input capture and injection.
 - [ ] Linux PipeWire screen capture.
 - [ ] Linux PipeWire audio routing backend.

@@ -22,12 +22,14 @@ pub mod inject;
 mod pasteboard;
 pub mod permissions;
 pub mod screen_capture;
+pub mod screen_encoder;
 
 pub use capture::MacosInputCapture;
 pub use clipboard::MacosClipboard;
 pub use inject::MacosInputInjector;
 pub use permissions::{MacosInputPermissionReport, MacosPermissionState};
 pub use screen_capture::MacosScreenCapture;
+pub use screen_encoder::MacosVideoToolboxEncoder;
 
 /// macOS implementation of [`PlatformBackend`].
 #[derive(Debug)]
