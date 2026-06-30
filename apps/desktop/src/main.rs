@@ -1056,6 +1056,286 @@ fn print_collaboration_simulator(runtime_devices: &[SimRuntimeDevice]) {
     }
 }
 
+fn build_simulation_report_json(
+    config: &SimConfig,
+    plans: &[SimConnectionPlanEntry<'_>],
+    runtime_devices: &[SimRuntimeDevice],
+) -> serde_json::Value {
+    use serde_json::json;
+
+    let devices = config
+        .device
+        .iter()
+        .map(|device| {
+            let id = device
+                .id
+                .clone()
+                .unwrap_or_else(|| simulated_device_id(device));
+            let display_name = device
+                .display_name
+                .clone()
+                .unwrap_or_else(|| device.name.clone());
+            let address = device.address.as_deref().unwrap_or("unassigned");
+            let trust_state = if device.trusted.unwrap_or(false) {
+                "trusted"
+            } else {
+                "untrusted"
+            };
+            json!({
+                "id": id,
+                "display_name": display_name,
+                "name": device.name,
+                "os": device.os,
+                "address": address,
+                "trust": trust_state,
+                "role": device.role,
+                "x": device.x,
+                "y": device.y,
+                "width": device.width,
+                "height": device.height,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let connection_planning = plans
+        .iter()
+        .map(|plan| {
+            let display_name = plan
+                .device
+                .display_name
+                .as_deref()
+                .unwrap_or(plan.device.name.as_str());
+            json!({
+                "device": display_name,
+                "kind": plan.kind.label(),
+                "detail": plan.detail,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let discovery_json = {
+        use nexkvm_discovery::{
+            PresencePolicy, PresenceTracker, ProximityObservation, ProximitySignalKind,
+        };
+
+        let mut tracker = PresenceTracker::new(PresencePolicy::lan_default());
+        let now_millis = 1_000;
+        for device in runtime_devices {
+            let mut confidence: f64 = if device.trusted { 0.85 } else { 0.35 };
+            if device.address.is_none() {
+                confidence = (confidence - 0.2_f64).max(0.05_f64);
+            }
+            tracker.observe(ProximityObservation::new(
+                device.id,
+                ProximitySignalKind::LanHeartbeat,
+                confidence,
+                now_millis,
+            ));
+            if device.trusted {
+                tracker.observe(ProximityObservation::new(
+                    device.id,
+                    ProximitySignalKind::PresenceHint,
+                    0.9,
+                    now_millis,
+                ));
+            }
+        }
+
+        let ranked_count = tracker.ranked(now_millis).len();
+        let best_active = tracker
+            .best_active(now_millis)
+            .and_then(|id| runtime_devices.iter().find(|device| device.id == id))
+            .map(|device| device.name.clone())
+            .unwrap_or_else(|| "none".to_string());
+        json!({
+            "ranked_count": ranked_count,
+            "best_active": best_active,
+        })
+    };
+
+    let latency_json = {
+        use nexkvm_network::RttTracker;
+
+        let mut tracker = RttTracker::default();
+        let base = config.network.rtt_ms.max(1);
+        let jitter = config.network.jitter_ms;
+        let low = base.saturating_sub(jitter).max(1);
+        let high = base.saturating_add(jitter).max(1);
+        tracker.record(std::time::Duration::from_millis(low));
+        tracker.record(std::time::Duration::from_millis(base));
+        tracker.record(std::time::Duration::from_millis(high));
+        json!({
+            "smoothed_ms": tracker.smoothed().unwrap_or_default().as_millis(),
+            "jitter_ms": tracker.jitter().unwrap_or_default().as_millis(),
+            "timeout_ms": tracker.timeout(std::time::Duration::from_millis(250)).as_millis(),
+        })
+    };
+
+    let workspace_json = {
+        use nexkvm_core::{
+            SnapDirection, UnifiedVirtualDesktop, WindowId, WindowSnapshot, WorkspaceDevice,
+            plan_window_snap,
+        };
+
+        if runtime_devices.is_empty() {
+            json!({ "status": "unavailable", "reason": "no-devices" })
+        } else {
+            let mut desktop = UnifiedVirtualDesktop::new();
+            for device in runtime_devices {
+                desktop.upsert(
+                    WorkspaceDevice::new(device.id, device.name.clone(), device.bounds)
+                        .with_online(true),
+                );
+            }
+            let source = &runtime_devices[0];
+            let window = WindowSnapshot {
+                id: WindowId::new("sim-window-main"),
+                device: source.id,
+                title: "Simulation Window".to_string(),
+                app_id: None,
+                bounds: source.bounds,
+                visible: true,
+            };
+            match plan_window_snap(&desktop, &window, SnapDirection::Right) {
+                Ok(plan) => {
+                    let target = runtime_devices
+                        .iter()
+                        .find(|device| device.id == plan.to)
+                        .map(|device| device.name.as_str())
+                        .unwrap_or("unknown");
+                    json!({
+                        "status": "ok",
+                        "snap_right_target": target,
+                        "cross_device": plan.cross_device,
+                    })
+                }
+                Err(error) => json!({
+                    "status": "unavailable",
+                    "reason": error.to_string(),
+                }),
+            }
+        }
+    };
+
+    let screen_json = {
+        use nexkvm_streaming::{
+            CaptureSource, CaptureSourceId, ScreenStreamCapabilities, ScreenStreamRequest,
+            negotiate_screen_stream,
+        };
+
+        if runtime_devices.len() < 2 {
+            json!({ "status": "unavailable", "reason": "need-at-least-2-devices" })
+        } else {
+            let sender = &runtime_devices[0];
+            let receiver = &runtime_devices[1];
+            let request = ScreenStreamRequest::interactive(
+                sender.id,
+                receiver.id,
+                CaptureSource::Display {
+                    id: CaptureSourceId::new("sim-display-0"),
+                    label: sender.name.clone(),
+                },
+            );
+            match negotiate_screen_stream(
+                &ScreenStreamCapabilities::software_h264(),
+                &ScreenStreamCapabilities::software_h264(),
+                request,
+            ) {
+                Ok(plan) => json!({
+                    "status": "ok",
+                    "codec": format!("{:?}", plan.codec),
+                    "fps": plan.fps,
+                    "resolution": {
+                        "width": plan.resolution.width,
+                        "height": plan.resolution.height,
+                    },
+                    "encrypted": plan.requires_encrypted_transport,
+                }),
+                Err(error) => json!({
+                    "status": "unavailable",
+                    "reason": error.to_string(),
+                }),
+            }
+        }
+    };
+
+    let collaboration_json = {
+        use nexkvm_core::{
+            CollaborationMode, CollaborationParticipant, CollaborationSession, ParticipantRole,
+        };
+
+        if runtime_devices.len() < 2 {
+            json!({ "status": "unavailable", "reason": "need-at-least-2-devices" })
+        } else {
+            let host = CollaborationParticipant::new(
+                runtime_devices[0].id,
+                runtime_devices[0].name.clone(),
+                ParticipantRole::Host,
+            );
+            let host_id = host.id;
+            let peer = CollaborationParticipant::new(
+                runtime_devices[1].id,
+                runtime_devices[1].name.clone(),
+                ParticipantRole::Driver,
+            );
+            let peer_id = peer.id;
+            let mut session = CollaborationSession::new(host, CollaborationMode::PairProgramming);
+
+            let result = (|| -> Result<(), nexkvm_core::CollaborationError> {
+                session.join(peer)?;
+                let _ = session.request_control(peer_id, runtime_devices[0].id, 1_000)?;
+                let _ = session.grant_control(
+                    host_id,
+                    peer_id,
+                    runtime_devices[0].id,
+                    1_000,
+                    Some(30_000),
+                )?;
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => json!({
+                    "status": "ok",
+                    "participants": session.participants().len(),
+                    "pending_requests": session.pending_requests().len(),
+                    "control_active": session.can_control(peer_id, runtime_devices[0].id, 1_001),
+                }),
+                Err(error) => json!({
+                    "status": "unavailable",
+                    "reason": error.to_string(),
+                }),
+            }
+        }
+    };
+
+    json!({
+        "network": {
+            "profile": config.network.profile,
+            "rtt_ms": config.network.rtt_ms,
+            "jitter_ms": config.network.jitter_ms,
+            "loss": config.network.loss,
+            "throughput_bps": config.network.throughput_bps,
+        },
+        "devices": devices,
+        "connection_planning": connection_planning,
+        "features": {
+            "clipboard": config.features.clipboard,
+            "file_transfer": config.features.file_transfer,
+            "screen_preview": config.features.screen_preview,
+            "shared_cursor": config.features.shared_cursor,
+            "plugins": config.features.plugins,
+        },
+        "simulators": {
+            "discovery": discovery_json,
+            "latency": latency_json,
+            "workspace": workspace_json,
+            "screen": screen_json,
+            "collaboration": collaboration_json,
+        },
+    })
+}
+
 fn simulate(path: Option<String>) -> anyhow::Result<()> {
     let path = path.unwrap_or_else(|| "tools/sim/local-workspace.toml".into());
     let text = std::fs::read_to_string(&path)
@@ -1129,6 +1409,8 @@ fn simulate(path: Option<String>) -> anyhow::Result<()> {
     );
     let runtime_devices = build_runtime_devices(&config);
     print_simulator_report(&runtime_devices, &config.network);
+    let machine_report = build_simulation_report_json(&config, &plans, &runtime_devices);
+    println!("  simulation_report_json: {}", machine_report);
     println!("  bytes: {}", text.len());
     println!("  status: typed TOML parsed and validated");
     Ok(())

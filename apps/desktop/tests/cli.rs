@@ -11,6 +11,17 @@ fn nexkvm() -> Command {
     Command::new(env!("CARGO_BIN_EXE_nexkvm"))
 }
 
+fn extract_simulation_report(stdout: &str) -> serde_json::Value {
+    let report_line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("simulation_report_json: "))
+        .expect("simulation_report_json line");
+    let json = report_line
+        .trim_start()
+        .trim_start_matches("simulation_report_json: ");
+    serde_json::from_str(json).expect("valid simulation_report_json")
+}
+
 fn temp_config_home(name: &str) -> std::path::PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -238,6 +249,21 @@ plugins = false
     assert!(
         stdout.contains("collaboration: participants=2 pending_requests=0 control_active=true")
     );
+    assert!(stdout.contains("simulation_report_json: {"));
+    let report = extract_simulation_report(&stdout);
+    assert_eq!(report["devices"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        report["connection_planning"][0]["kind"].as_str(),
+        Some("direct-lan")
+    );
+    assert_eq!(
+        report["simulators"]["workspace"]["status"].as_str(),
+        Some("ok")
+    );
+    assert_eq!(
+        report["simulators"]["collaboration"]["control_active"].as_bool(),
+        Some(true)
+    );
     assert!(stdout.contains("status: typed TOML parsed and validated"));
 }
 
@@ -291,6 +317,15 @@ plugins = false
     assert!(stdout.contains("workspace: snap_right target=tablet-future cross_device=false"));
     assert!(stdout.contains("screen: unavailable (need at least 2 devices)"));
     assert!(stdout.contains("collaboration: unavailable (need at least 2 devices)"));
+    let report = extract_simulation_report(&stdout);
+    assert_eq!(
+        report["simulators"]["screen"]["status"].as_str(),
+        Some("unavailable")
+    );
+    assert_eq!(
+        report["simulators"]["workspace"]["cross_device"].as_bool(),
+        Some(false)
+    );
 }
 
 #[test]
