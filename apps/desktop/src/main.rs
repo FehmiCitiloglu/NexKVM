@@ -371,22 +371,31 @@ fn merge_peer_handlers(
 
 fn create_clipboard_peer_handler(
     can_access_clipboard: bool,
-    _local_device_id: nexkvm_core::DeviceId,
+    local_device_id: nexkvm_core::DeviceId,
 ) -> Option<connection::PeerConnectionHandler> {
     if !can_access_clipboard {
         return None;
     }
     #[cfg(target_os = "macos")]
     {
-        use nexkvm_clipboard::Clipboard;
+        use nexkvm_clipboard::{Clipboard, ClipboardSync, PlaintextCipher};
+        use std::sync::Mutex;
 
         let clipboard = Arc::new(nexkvm_platform_macos::MacosClipboard::new());
+        // Create a sync state machine per peer with plaintext cipher (TODO: use session encryption)
+        let sync = Arc::new(Mutex::new(ClipboardSync::new(
+            local_device_id,
+            Box::new(PlaintextCipher),
+        )));
 
         let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
             let connection: Arc<dyn nexkvm_network::Connection> =
                 Arc::<dyn nexkvm_network::Connection>::from(connection);
             let clipboard_read = Arc::clone(&clipboard);
-            let _clipboard_write = Arc::clone(&clipboard);
+            let clipboard_write = Arc::clone(&clipboard);
+            let sync_poll = Arc::clone(&sync);
+            let conn_send = Arc::clone(&connection);
+            let conn_recv = Arc::clone(&connection);
 
             // Poll local clipboard periodically
             tokio::spawn(async move {
@@ -395,8 +404,49 @@ fn create_clipboard_peer_handler(
 
                     match clipboard_read.read().await {
                         Ok(Some(snapshot)) => {
-                            tracing::debug!("clipboard snapshot: {:?}", snapshot);
-                            // TODO: encode and send via connection
+                            let now_millis = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+
+                            // Prepare the update via the sync state machine
+                            let update_result = match sync_poll.lock() {
+                                Ok(mut s) => s.prepare_outbound(&snapshot, now_millis),
+                                Err(_) => {
+                                    tracing::warn!("clipboard sync lock poisoned");
+                                    continue;
+                                }
+                            };
+
+                            match update_result {
+                                Ok(Some(update)) => {
+                                    // Encode the update
+                                    match update.encode() {
+                                        Ok(body) => {
+                                            let envelope = nexkvm_protocol::Envelope::new(
+                                                nexkvm_protocol::PROTOCOL_VERSION,
+                                                nexkvm_protocol::MessageId(0),
+                                                nexkvm_protocol::MessageKind::Clipboard,
+                                                body,
+                                            );
+                                            if let Err(e) = conn_send.send(envelope).await {
+                                                tracing::warn!("clipboard send failed: {}", e);
+                                                break;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("clipboard update encode failed: {}", e);
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    // Echo suppression or duplicate
+                                    tracing::debug!("clipboard update suppressed (echo/duplicate)");
+                                }
+                                Err(e) => {
+                                    tracing::warn!("clipboard prepare_outbound failed: {}", e);
+                                }
+                            }
                         }
                         Ok(None) => {
                             // Empty clipboard
@@ -409,22 +459,57 @@ fn create_clipboard_peer_handler(
             });
 
             // Receive remote clipboard updates
-            let _connection = Arc::clone(&connection);
+            let sync_recv = Arc::clone(&sync);
             tokio::spawn(async move {
                 loop {
-                    match _connection.recv().await {
+                    match conn_recv.recv().await {
                         Ok(envelope) => {
                             if envelope.kind != nexkvm_protocol::MessageKind::Clipboard {
                                 continue;
                             }
-                            tracing::debug!(
-                                "received clipboard update: {} bytes",
-                                envelope.body.len()
-                            );
-                            // TODO: decode and apply via clipboard_write.write()
+
+                            // Decode the update
+                            match nexkvm_clipboard::ClipboardUpdate::decode(bytes::Bytes::from(
+                                envelope.body,
+                            )) {
+                                Ok(update) => {
+                                    // Apply the update via the sync state machine
+                                    let snapshot_result = match sync_recv.lock() {
+                                        Ok(mut s) => s.accept_inbound(update),
+                                        Err(_) => {
+                                            tracing::warn!("clipboard sync lock poisoned");
+                                            continue;
+                                        }
+                                    };
+
+                                    match snapshot_result {
+                                        Ok(Some(snapshot)) => {
+                                            // Write the snapshot to the clipboard
+                                            if let Err(e) = clipboard_write.write(snapshot).await {
+                                                tracing::warn!("clipboard write failed: {}", e);
+                                            }
+                                        }
+                                        Ok(None) => {
+                                            // Stale or echo, ignore
+                                            tracing::debug!(
+                                                "clipboard update ignored (stale/echo)"
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "clipboard accept_inbound failed: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("clipboard update decode failed: {}", e);
+                                }
+                            }
                         }
                         Err(_) => {
-                            tracing::warn!("clipboard connection closed");
+                            tracing::info!("clipboard connection closed");
                             break;
                         }
                     }
@@ -435,6 +520,7 @@ fn create_clipboard_peer_handler(
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = local_device_id;
         None
     }
 }

@@ -19,12 +19,15 @@ mod accessibility;
 pub mod capture;
 pub mod clipboard;
 pub mod inject;
+mod pasteboard;
 pub mod permissions;
+pub mod screen_capture;
 
 pub use capture::MacosInputCapture;
 pub use clipboard::MacosClipboard;
 pub use inject::MacosInputInjector;
 pub use permissions::{MacosInputPermissionReport, MacosPermissionState};
+pub use screen_capture::MacosScreenCapture;
 
 /// macOS implementation of [`PlatformBackend`].
 #[derive(Debug)]

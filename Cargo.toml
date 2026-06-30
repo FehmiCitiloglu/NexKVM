@@ -73,6 +73,10 @@ mdns-sd = "0.11"
 # Compression (pure-Rust miniz_oxide backend; used for clipboard sync payloads)
 flate2 = "1"
 
+# Clipboard (platform-specific backends)
+clipboard-win = "5"
+arboard = "3"
+
 # Internal crates
 nexkvm-protocol = { path = "crates/protocol" }
 nexkvm-core = { path = "crates/core" }

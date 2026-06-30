@@ -276,15 +276,15 @@ planned.
 
 ### Native Platform Integrations
 
-- [x] macOS clipboard backend (MVP text read/write via pbpaste/pbcopy; daemon runtime
-  integration complete; multi-format NSPasteboard mapping pending).
+- [x] macOS clipboard backend (MVP text read/write via pbpaste/pbcopy; daemon runtime integration complete; encode/decode transport layer complete; remote updates applied via Clipboard::write(); multi-format NSPasteboard FFI support for text, HTML, RTF, and images implemented).
+- [x] Windows clipboard backend (MVP text read/write via native Clipboard API; UTF-8 encoding; daemon runtime integration complete; supports CF_UNICODETEXT, CF_DIB, CF_HDROP format mapping).
+- [x] Linux clipboard backend (MVP text read/write via arboard; unified X11/Wayland support; daemon runtime integration complete).
 - [ ] macOS screen capture using Screen Recording APIs.
 - [ ] macOS media encoding through VideoToolbox.
 - [ ] Linux Wayland portal-mediated input capture and injection.
 - [ ] Linux PipeWire screen capture.
 - [ ] Linux PipeWire audio routing backend.
 - [ ] Linux X11 input and clipboard fallback implementation.
-- [ ] Windows clipboard backend.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.
 

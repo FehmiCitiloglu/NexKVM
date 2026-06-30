@@ -15,9 +15,11 @@ use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
 use nexkvm_core::{CoreError, OsKind};
 
 pub mod capture;
+pub mod clipboard;
 pub mod inject;
 
 pub use capture::WindowsInputCapture;
+pub use clipboard::WindowsClipboard;
 pub use inject::WindowsInputInjector;
 
 /// Windows implementation of [`PlatformBackend`].
@@ -44,7 +46,7 @@ impl PlatformBackend for WindowsBackend {
         PlatformCapabilities {
             can_inject_input: true,
             can_capture_input: true,
-            can_access_clipboard: false,
+            can_access_clipboard: true,
             permission_pending: false,
         }
     }

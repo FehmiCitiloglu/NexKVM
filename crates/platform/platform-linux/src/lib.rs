@@ -17,7 +17,10 @@ use async_trait::async_trait;
 use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
 use nexkvm_core::{CoreError, OsKind};
 
+pub mod clipboard;
 pub mod inject;
+
+pub use clipboard::LinuxClipboard;
 
 /// Display/session family detected for Linux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
