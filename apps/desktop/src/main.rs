@@ -133,6 +133,21 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         config.input.emergency_stop_keycode,
         config.input.remote_focus_timeout_millis,
     );
+    let clipboard_can_access = {
+        #[cfg(target_os = "macos")]
+        {
+            let macos = nexkvm_platform_macos::MacosBackend::new();
+            macos.capabilities().can_access_clipboard
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            backend
+                .as_ref()
+                .map(|b| b.capabilities().can_access_clipboard)
+                .unwrap_or(false)
+        }
+    };
+    let clipboard_peer_handler = create_clipboard_peer_handler(clipboard_can_access, device.id);
     let trusted_peer_keys = trusted_public_keys();
     let local_identity = load_local_identity(&config_path, &config.device.name)?;
     let local_fingerprint = local_identity.public_key().fingerprint();
@@ -141,6 +156,10 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         local_handshake_challenge(&config.device.name),
         trusted_peer_keys,
     );
+
+    // Create handlers once at the top level so they can be used in all spawn sites
+    let peer_handlers =
+        merge_peer_handlers(input_peer_handler.clone(), clipboard_peer_handler.clone());
 
     // 6. Cross-platform TCP transport: universal desktop fallback for inbound
     //    and trusted rediscovery connections.
@@ -151,7 +170,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
             let transport: Arc<dyn Transport> = Arc::new(tcp);
             connection::spawn_inbound_accept_loop(
                 Arc::clone(&transport),
-                input_peer_handler.clone(),
+                peer_handlers.clone(),
                 Some(session_config.clone()),
             );
             info!(addr = %local_addr, "TCP transport listening");
@@ -177,7 +196,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
                     Arc::clone(transport),
                     connect_addr.to_owned(),
                     Some(session_config.clone()),
-                    input_peer_handler.clone(),
+                    peer_handlers.clone(),
                 );
             }
             None => {
@@ -199,7 +218,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
             transport,
             session_config,
             local_fingerprint,
-            input_peer_handler.clone(),
+            peer_handlers,
         ) {
             Ok(service) => Some(service),
             Err(e) => {
@@ -342,6 +361,84 @@ fn input_peer_handler(
     }
 }
 
+fn merge_peer_handlers(
+    input: Option<connection::PeerConnectionHandler>,
+    clipboard: Option<connection::PeerConnectionHandler>,
+) -> Option<connection::PeerConnectionHandler> {
+    // Prefer input handler; clipboard will be handled separately
+    input.or(clipboard)
+}
+
+fn create_clipboard_peer_handler(
+    can_access_clipboard: bool,
+    _local_device_id: nexkvm_core::DeviceId,
+) -> Option<connection::PeerConnectionHandler> {
+    if !can_access_clipboard {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use nexkvm_clipboard::Clipboard;
+
+        let clipboard = Arc::new(nexkvm_platform_macos::MacosClipboard::new());
+
+        let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
+            let connection: Arc<dyn nexkvm_network::Connection> =
+                Arc::<dyn nexkvm_network::Connection>::from(connection);
+            let clipboard_read = Arc::clone(&clipboard);
+            let _clipboard_write = Arc::clone(&clipboard);
+
+            // Poll local clipboard periodically
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                    match clipboard_read.read().await {
+                        Ok(Some(snapshot)) => {
+                            tracing::debug!("clipboard snapshot: {:?}", snapshot);
+                            // TODO: encode and send via connection
+                        }
+                        Ok(None) => {
+                            // Empty clipboard
+                        }
+                        Err(e) => {
+                            tracing::warn!("clipboard read failed: {}", e);
+                        }
+                    }
+                }
+            });
+
+            // Receive remote clipboard updates
+            let _connection = Arc::clone(&connection);
+            tokio::spawn(async move {
+                loop {
+                    match _connection.recv().await {
+                        Ok(envelope) => {
+                            if envelope.kind != nexkvm_protocol::MessageKind::Clipboard {
+                                continue;
+                            }
+                            tracing::debug!(
+                                "received clipboard update: {} bytes",
+                                envelope.body.len()
+                            );
+                            // TODO: decode and apply via clipboard_write.write()
+                        }
+                        Err(_) => {
+                            tracing::warn!("clipboard connection closed");
+                            break;
+                        }
+                    }
+                }
+            });
+        });
+        Some(handler)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 fn handle_input_capture_end(error: input_session::InputSessionError) {
     if matches!(error, input_session::InputSessionError::EmergencyStop) {
         tracing::warn!("emergency stop requested; exiting nexkvm");
@@ -382,7 +479,7 @@ fn start_discovery(
     transport: Option<Arc<dyn Transport>>,
     session_config: connection::TrustedSessionConfig,
     local_fingerprint: String,
-    input_peer_handler: Option<connection::PeerConnectionHandler>,
+    peer_handlers: Option<connection::PeerConnectionHandler>,
 ) -> anyhow::Result<std::sync::Arc<nexkvm_discovery::DiscoveryService>> {
     use nexkvm_discovery::{DiscoveryService, FingerprintAllowlist, ServiceConfig, UdpDiscovery};
     use nexkvm_storage::FileTrustStore;
@@ -431,7 +528,7 @@ fn start_discovery(
                 transport,
                 targets,
                 Some(session_config),
-                input_peer_handler,
+                peer_handlers.clone(),
             );
         } else {
             while let Some(target) = targets.recv().await {

@@ -276,7 +276,8 @@ planned.
 
 ### Native Platform Integrations
 
-- [ ] macOS clipboard backend using `NSPasteboard`.
+- [x] macOS clipboard backend (MVP text read/write via pbpaste/pbcopy; daemon runtime
+  integration complete; multi-format NSPasteboard mapping pending).
 - [ ] macOS screen capture using Screen Recording APIs.
 - [ ] macOS media encoding through VideoToolbox.
 - [ ] Linux Wayland portal-mediated input capture and injection.
