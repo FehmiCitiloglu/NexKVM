@@ -279,7 +279,7 @@ planned.
 - [x] macOS clipboard backend (MVP text read/write via pbpaste/pbcopy; daemon runtime integration complete; encode/decode transport layer complete; remote updates applied via Clipboard::write(); multi-format NSPasteboard FFI support for text, HTML, RTF, and images implemented).
 - [x] Windows clipboard backend (MVP text read/write via native Clipboard API; UTF-8 encoding; daemon runtime integration complete; supports CF_UNICODETEXT, CF_DIB, CF_HDROP format mapping).
 - [x] Linux clipboard backend (MVP text read/write via arboard; unified X11/Wayland support; daemon runtime integration complete).
-- [ ] macOS screen capture using Screen Recording APIs.
+- [~] macOS screen capture using Screen Recording APIs (scaffolding complete; display enumeration via NSScreen FFI; ScreenCaptureBackend trait impl with capabilities reporting, permission stubs, and source listing; frame capture phased pending ScreenCaptureKit integration; 2 unit tests passing).
 - [ ] macOS media encoding through VideoToolbox.
 - [ ] Linux Wayland portal-mediated input capture and injection.
 - [ ] Linux PipeWire screen capture.
