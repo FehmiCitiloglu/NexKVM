@@ -27,6 +27,9 @@ planned.
 - [x] Desktop daemon crate and developer CLI entrypoint.
 - [x] Cross-platform native GUI control panel crate for configuration, daemon
   control, diagnostics, permissions, pairing, and input handoff settings.
+- [x] GUI-managed daemon start preflight that detects a busy listen port, stops
+  a stale local `nexkvm` daemon process, and refuses startup if the port remains
+  occupied.
 - [x] Future mobile companion placeholder crate for Android and iOS targets.
 - [x] Platform-specific crate boundaries for macOS, Linux, and Windows.
 
