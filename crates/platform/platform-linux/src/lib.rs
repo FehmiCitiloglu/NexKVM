@@ -13,6 +13,8 @@
 //! [`PlatformBackend`] boundary in later phases; no blocking OS call is made on
 //! async paths here.
 
+#![allow(clashing_extern_declarations)]
+
 use async_trait::async_trait;
 use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
 use nexkvm_core::{CoreError, OsKind};
@@ -25,8 +27,9 @@ pub mod portal_input;
 
 pub use clipboard::LinuxClipboard;
 pub use pipewire_audio::{
-    PipeWireAudioBackend, PipeWireAudioGraph, PipeWireAudioGraphSnapshot, PipeWireAudioNode,
-    StaticPipeWireAudioGraph,
+    NativePipeWireAudioGraph, PIPEWIRE_INTERFACE_NODE, PipeWireAudioBackend, PipeWireAudioGraph,
+    PipeWireAudioGraphSnapshot, PipeWireAudioNode, PipeWireRegistryCollector,
+    PipeWireRegistryGlobal, StaticPipeWireAudioGraph,
 };
 pub use pipewire_screen::{
     LinuxPipeWireScreenCapture, NativePipeWireFrameReader, PendingPipeWireFrameReader,

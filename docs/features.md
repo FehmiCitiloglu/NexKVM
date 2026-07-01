@@ -320,9 +320,11 @@ planned.
   mapped into the shared `AudioBackend` model; `Audio/Sink`, `Audio/Source`, and
   `Audio/Duplex` nodes become playback/capture/duplex `AudioDevice`s with
   default endpoint reporting; playback switch requests validate
-  `pipewire-node:<id>` targets behind a graph boundary; live PipeWire registry
-  enumeration, WirePlumber/default-node mutation, and stream capture/playback
-  routing are pending).
+  `pipewire-node:<id>` targets behind a graph boundary; Linux-only native graph
+  enumeration connects to the user PipeWire core, listens to registry
+  `global`/`global_remove` events, parses SPA dict properties, and feeds the
+  shared graph snapshot; WirePlumber/default-node mutation and stream
+  capture/playback routing are pending).
 - [ ] Linux X11 input and clipboard fallback implementation.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.
