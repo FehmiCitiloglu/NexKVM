@@ -111,6 +111,163 @@ pub struct PipeWireRawFrame {
     pub payload: Bytes,
 }
 
+/// Negotiated PipeWire frame format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipeWireFrameFormat {
+    /// Frame resolution.
+    pub resolution: ScreenResolution,
+    /// PipeWire raw video format.
+    pub video_format: PipeWireVideoFormat,
+    /// Pixel format.
+    pub pixel_format: PixelFormat,
+    /// Bytes per line for mapped system-memory planes.
+    pub stride: u32,
+}
+
+/// SPA raw video format ids consumed from `spa_video_info_raw`.
+pub const SPA_VIDEO_FORMAT_RGBX: u32 = 5;
+/// SPA raw video BGRx id.
+pub const SPA_VIDEO_FORMAT_BGRX: u32 = 6;
+/// SPA raw video RGBA id.
+pub const SPA_VIDEO_FORMAT_RGBA: u32 = 9;
+/// SPA raw video BGRA id.
+pub const SPA_VIDEO_FORMAT_BGRA: u32 = 10;
+/// SPA raw video NV12 id.
+pub const SPA_VIDEO_FORMAT_NV12: u32 = 23;
+
+/// Parsed subset of `spa_video_info_raw` used by NexKVM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipeWireSpaRawVideoInfo {
+    /// Raw `spa_video_format` id.
+    pub spa_format: u32,
+    /// Width from `spa_video_info_raw.size.width`.
+    pub width: u32,
+    /// Height from `spa_video_info_raw.size.height`.
+    pub height: u32,
+    /// Optional line stride from parsed pod metadata.
+    pub stride: Option<u32>,
+}
+
+impl PipeWireFrameFormat {
+    /// Select the best supported raw format for a requested resolution.
+    ///
+    /// # Errors
+    /// Returns [`ScreenError`] if none of the negotiated formats can be mapped
+    /// into NexKVM's shared frame model.
+    pub fn fixate(
+        resolution: ScreenResolution,
+        candidates: &[PipeWireVideoFormat],
+    ) -> Result<Self, ScreenError> {
+        let video_format = candidates
+            .iter()
+            .copied()
+            .find(|format| {
+                matches!(
+                    format,
+                    PipeWireVideoFormat::Bgra | PipeWireVideoFormat::Rgba
+                )
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|format| *format == PipeWireVideoFormat::Nv12)
+            })
+            .ok_or(ScreenError::CapabilityMismatch(
+                "no supported PipeWire raw video format",
+            ))?;
+        let pixel_format = video_format.pixel_format();
+        let stride = video_format.stride_for_width(resolution.width)?;
+        Ok(Self {
+            resolution,
+            video_format,
+            pixel_format,
+            stride,
+        })
+    }
+
+    /// Convert parsed PipeWire SPA raw video info into a NexKVM frame format.
+    ///
+    /// # Errors
+    /// Returns [`ScreenError`] when the SPA video format id is unsupported.
+    pub fn from_spa_raw_info(info: PipeWireSpaRawVideoInfo) -> Result<Self, ScreenError> {
+        let video_format = PipeWireVideoFormat::from_spa_format(info.spa_format).ok_or(
+            ScreenError::CapabilityMismatch("unsupported PipeWire SPA raw video format"),
+        )?;
+        let resolution = ScreenResolution::new(info.width, info.height);
+        let pixel_format = video_format.pixel_format();
+        let stride = match info.stride {
+            Some(stride) if stride > 0 => stride,
+            _ => video_format.stride_for_width(info.width)?,
+        };
+        Ok(Self {
+            resolution,
+            video_format,
+            pixel_format,
+            stride,
+        })
+    }
+
+    /// Expected mapped system-memory payload length for this format.
+    #[must_use]
+    pub fn system_payload_len(self) -> Option<usize> {
+        let height = usize::try_from(self.resolution.height).ok()?;
+        usize::try_from(self.stride).ok()?.checked_mul(height)
+    }
+}
+
+/// PipeWire raw video formats NexKVM can consume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipeWireVideoFormat {
+    /// PipeWire BGRA/BGRx style 32-bit pixels.
+    Bgra,
+    /// PipeWire RGBA/RGBx style 32-bit pixels.
+    Rgba,
+    /// NV12 YUV 4:2:0.
+    Nv12,
+}
+
+impl PipeWireVideoFormat {
+    fn from_spa_format(format: u32) -> Option<Self> {
+        match format {
+            SPA_VIDEO_FORMAT_BGRA | SPA_VIDEO_FORMAT_BGRX => Some(Self::Bgra),
+            SPA_VIDEO_FORMAT_RGBA | SPA_VIDEO_FORMAT_RGBX => Some(Self::Rgba),
+            SPA_VIDEO_FORMAT_NV12 => Some(Self::Nv12),
+            _ => None,
+        }
+    }
+
+    fn pixel_format(self) -> PixelFormat {
+        match self {
+            Self::Bgra => PixelFormat::Bgra8,
+            Self::Rgba => PixelFormat::Rgba8,
+            Self::Nv12 => PixelFormat::Nv12,
+        }
+    }
+
+    fn stride_for_width(self, width: u32) -> Result<u32, ScreenError> {
+        match self {
+            Self::Bgra | Self::Rgba => width
+                .checked_mul(4)
+                .ok_or_else(|| ScreenError::Codec("PipeWire stride overflow".into())),
+            Self::Nv12 => Ok(width),
+        }
+    }
+}
+
+/// Mapped PipeWire buffer plane.
+#[derive(Debug, Clone, Copy)]
+pub struct PipeWireMappedBuffer<'a> {
+    /// Mapped bytes for the first video plane.
+    pub bytes: &'a [u8],
+    /// Valid data offset from the SPA chunk.
+    pub chunk_offset: usize,
+    /// Valid data size from the SPA chunk.
+    pub chunk_size: usize,
+    /// Optional DMA-BUF fd for non-mapped GPU-backed buffers.
+    pub fd: Option<i64>,
+}
+
 impl PipeWireRawFrame {
     /// Validate and convert the raw PipeWire frame into the shared streaming type.
     ///
@@ -569,6 +726,50 @@ fn validate_pipewire_payload(
     Ok(())
 }
 
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn pipewire_frame_from_mapped_buffer(
+    buffer: PipeWireMappedBuffer<'_>,
+    request: PipeWireFrameRequest,
+    format: PipeWireFrameFormat,
+    sequence: u64,
+    capture_time_micros: u64,
+) -> Result<PipeWireRawFrame, ScreenError> {
+    if request.memory == GpuMemoryKind::DmaBuf {
+        let fd = buffer.fd.ok_or_else(|| {
+            ScreenError::Backend("PipeWire DMA-BUF buffer did not include an fd".into())
+        })?;
+        let mut payload = Vec::with_capacity(24);
+        payload.extend_from_slice(&fd.to_le_bytes());
+        payload.extend_from_slice(&(buffer.chunk_offset as u64).to_le_bytes());
+        payload.extend_from_slice(&(buffer.chunk_size as u64).to_le_bytes());
+        return Ok(PipeWireRawFrame {
+            sequence,
+            capture_time_micros,
+            resolution: format.resolution,
+            pixel_format: format.pixel_format,
+            memory: GpuMemoryKind::DmaBuf,
+            payload: Bytes::from(payload),
+        });
+    }
+
+    let end = buffer
+        .chunk_offset
+        .checked_add(buffer.chunk_size)
+        .ok_or_else(|| ScreenError::Codec("PipeWire chunk range overflow".into()))?;
+    let bytes = buffer
+        .bytes
+        .get(buffer.chunk_offset..end)
+        .ok_or_else(|| ScreenError::Codec("PipeWire chunk range is outside mapped data".into()))?;
+    Ok(PipeWireRawFrame {
+        sequence,
+        capture_time_micros,
+        resolution: format.resolution,
+        pixel_format: format.pixel_format,
+        memory: GpuMemoryKind::System,
+        payload: Bytes::copy_from_slice(bytes),
+    })
+}
+
 #[cfg(target_os = "linux")]
 async fn native_pipewire_next_frame(
     remote: Arc<PipeWireRemoteFd>,
@@ -593,11 +794,23 @@ async fn native_pipewire_next_frame(
 
 #[cfg(target_os = "linux")]
 mod native_pipewire {
-    use super::{PipeWireFrameRequest, PipeWireRawFrame, PipeWireRemoteFd, ScreenError};
+    use super::{
+        PipeWireFrameFormat, PipeWireFrameRequest, PipeWireMappedBuffer, PipeWireRawFrame,
+        PipeWireRemoteFd, PipeWireVideoFormat, ScreenError, pipewire_frame_from_mapped_buffer,
+    };
+    use std::ffi::CString;
     use std::ffi::{c_char, c_int, c_void};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::ptr;
     use std::sync::Arc;
+    use std::sync::mpsc::{SyncSender, TryRecvError, sync_channel};
+    use std::time::{Duration, Instant};
+
+    const PW_DIRECTION_INPUT: u32 = 0;
+    const PW_ID_ANY: u32 = u32::MAX;
+    const PW_STREAM_FLAG_AUTOCONNECT: u32 = 1 << 0;
+    const PW_STREAM_FLAG_MAP_BUFFERS: u32 = 1 << 2;
+    const STREAM_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
     #[repr(C)]
     struct SpaDict {
@@ -624,6 +837,119 @@ mod native_pipewire {
         _private: [u8; 0],
     }
 
+    #[repr(C)]
+    struct PwProperties {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct PwStream {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct SpaPod {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct SpaList {
+        next: *mut SpaList,
+        prev: *mut SpaList,
+    }
+
+    #[repr(C)]
+    struct SpaCallbacks {
+        funcs: *const c_void,
+        data: *mut c_void,
+    }
+
+    #[repr(C)]
+    struct SpaHook {
+        link: SpaList,
+        cb: SpaCallbacks,
+        removed: Option<extern "C" fn(*mut SpaHook)>,
+        priv_: *mut c_void,
+    }
+
+    impl Default for SpaHook {
+        fn default() -> Self {
+            Self {
+                link: SpaList {
+                    next: ptr::null_mut(),
+                    prev: ptr::null_mut(),
+                },
+                cb: SpaCallbacks {
+                    funcs: ptr::null(),
+                    data: ptr::null_mut(),
+                },
+                removed: None,
+                priv_: ptr::null_mut(),
+            }
+        }
+    }
+
+    #[repr(C)]
+    struct PwStreamEvents {
+        version: u32,
+        destroy: Option<extern "C" fn(*mut c_void)>,
+        state_changed: Option<extern "C" fn(*mut c_void, u32, u32, *const c_char)>,
+        control_info: Option<extern "C" fn(*mut c_void, u32, *const c_void)>,
+        io_changed: Option<extern "C" fn(*mut c_void, u32, *mut c_void, u32)>,
+        param_changed: Option<extern "C" fn(*mut c_void, u32, *const SpaPod)>,
+        add_buffer: Option<extern "C" fn(*mut c_void, *mut PwBuffer)>,
+        remove_buffer: Option<extern "C" fn(*mut c_void, *mut PwBuffer)>,
+        process: Option<extern "C" fn(*mut c_void)>,
+        drained: Option<extern "C" fn(*mut c_void)>,
+        command: Option<extern "C" fn(*mut c_void, *const c_void)>,
+        trigger_done: Option<extern "C" fn(*mut c_void)>,
+    }
+
+    #[repr(C)]
+    struct PwBuffer {
+        buffer: *mut SpaBuffer,
+        user_data: *mut c_void,
+        size: u64,
+        requested: u64,
+        time: u64,
+    }
+
+    #[repr(C)]
+    struct SpaBuffer {
+        n_metas: u32,
+        metas: *mut c_void,
+        n_datas: u32,
+        datas: *mut SpaData,
+    }
+
+    #[repr(C)]
+    struct SpaData {
+        type_: u32,
+        flags: u32,
+        fd: i64,
+        mapoffset: u32,
+        maxsize: u32,
+        data: *mut c_void,
+        chunk: *mut SpaChunk,
+    }
+
+    #[repr(C)]
+    struct SpaChunk {
+        offset: u32,
+        size: u32,
+        stride: i32,
+        flags: i32,
+    }
+
+    struct NativeStreamData {
+        stream: *mut PwStream,
+        request: PipeWireFrameRequest,
+        format: PipeWireFrameFormat,
+        format_negotiated: bool,
+        sequence: u64,
+        sender: SyncSender<Result<PipeWireRawFrame, String>>,
+    }
+
     unsafe extern "C" {
         fn dup(oldfd: c_int) -> c_int;
     }
@@ -647,18 +973,66 @@ mod native_pipewire {
             user_data_size: usize,
         ) -> *mut PwCore;
         fn pw_core_disconnect(core: *mut PwCore);
+        fn pw_loop_iterate(loop_: *mut PwLoop, timeout: c_int) -> c_int;
+        fn pw_properties_new_string(args: *const c_char) -> *mut PwProperties;
+        fn pw_properties_set(
+            properties: *mut PwProperties,
+            key: *const c_char,
+            value: *const c_char,
+        ) -> c_int;
+        fn pw_properties_free(properties: *mut PwProperties);
+        fn pw_stream_new(
+            core: *mut PwCore,
+            name: *const c_char,
+            props: *mut PwProperties,
+        ) -> *mut PwStream;
+        fn pw_stream_destroy(stream: *mut PwStream);
+        fn pw_stream_add_listener(
+            stream: *mut PwStream,
+            listener: *mut SpaHook,
+            events: *const PwStreamEvents,
+            data: *mut c_void,
+        );
+        fn pw_stream_connect(
+            stream: *mut PwStream,
+            direction: u32,
+            target_id: u32,
+            flags: u32,
+            params: *mut *const SpaPod,
+            n_params: u32,
+        ) -> c_int;
+        fn pw_stream_dequeue_buffer(stream: *mut PwStream) -> *mut PwBuffer;
+        fn pw_stream_queue_buffer(stream: *mut PwStream, buffer: *mut PwBuffer) -> c_int;
     }
 
     pub(super) fn connect_remote_and_read_frame(
         remote: Arc<PipeWireRemoteFd>,
         request: PipeWireFrameRequest,
     ) -> Result<PipeWireRawFrame, ScreenError> {
-        let _target_object = request.target.target_object();
         let fd = duplicate_fd(&remote)?;
-        let _connection = PipeWireConnection::connect_fd(fd)?;
-        Err(ScreenError::Backend(
-            "PipeWire stream process/dequeue frame pump is not wired yet".into(),
-        ))
+        let connection = PipeWireConnection::connect_fd(fd)?;
+        let (sender, receiver) = sync_channel(1);
+        let stream = PipeWireStream::connect(&connection, request, sender)?;
+        let started = Instant::now();
+
+        loop {
+            match receiver.try_recv() {
+                Ok(Ok(frame)) => return Ok(frame),
+                Ok(Err(error)) => return Err(ScreenError::Backend(error)),
+                Err(TryRecvError::Disconnected) => {
+                    return Err(ScreenError::Backend(
+                        "PipeWire stream reader disconnected".into(),
+                    ));
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            if started.elapsed() >= STREAM_WAIT_TIMEOUT {
+                return Err(ScreenError::Backend(
+                    "timed out waiting for PipeWire frame".into(),
+                ));
+            }
+            stream.iterate(100)?;
+        }
     }
 
     fn duplicate_fd(remote: &PipeWireRemoteFd) -> Result<OwnedFd, ScreenError> {
@@ -676,6 +1050,7 @@ mod native_pipewire {
         core: *mut PwCore,
         context: *mut PwContext,
         main_loop: *mut PwMainLoop,
+        loop_: *mut PwLoop,
     }
 
     impl PipeWireConnection {
@@ -705,6 +1080,7 @@ mod native_pipewire {
                     core,
                     context,
                     main_loop,
+                    loop_: loop_ptr,
                 })
             }
         }
@@ -718,6 +1094,259 @@ mod native_pipewire {
                 pw_main_loop_destroy(self.main_loop);
             }
         }
+    }
+
+    struct PipeWireStream {
+        stream: *mut PwStream,
+        listener: SpaHook,
+        events: PwStreamEvents,
+        data: Box<NativeStreamData>,
+        loop_: *mut PwLoop,
+    }
+
+    impl PipeWireStream {
+        fn connect(
+            connection: &PipeWireConnection,
+            request: PipeWireFrameRequest,
+            sender: SyncSender<Result<PipeWireRawFrame, String>>,
+        ) -> Result<Self, ScreenError> {
+            let props = stream_properties(&request)?;
+            let name = CString::new("nexkvm-screencast")
+                .map_err(|error| ScreenError::Backend(format!("PipeWire stream name: {error}")))?;
+            let stream = unsafe { pw_stream_new(connection.core, name.as_ptr(), props) };
+            if stream.is_null() {
+                unsafe {
+                    pw_properties_free(props);
+                }
+                return Err(ScreenError::Backend("create PipeWire stream".into()));
+            }
+
+            let format = PipeWireFrameFormat::fixate(
+                request.resolution,
+                &[
+                    PipeWireVideoFormat::Bgra,
+                    PipeWireVideoFormat::Rgba,
+                    PipeWireVideoFormat::Nv12,
+                ],
+            )?;
+            let mut data = Box::new(NativeStreamData {
+                stream,
+                format,
+                format_negotiated: false,
+                request,
+                sequence: 1,
+                sender,
+            });
+            let mut listener = SpaHook::default();
+            let events = PwStreamEvents {
+                version: 0,
+                destroy: None,
+                state_changed: None,
+                control_info: None,
+                io_changed: None,
+                param_changed: Some(on_stream_param_changed),
+                add_buffer: None,
+                remove_buffer: None,
+                process: Some(on_stream_process),
+                drained: None,
+                command: None,
+                trigger_done: None,
+            };
+            unsafe {
+                pw_stream_add_listener(
+                    stream,
+                    &mut listener,
+                    &events,
+                    (&mut *data as *mut NativeStreamData).cast(),
+                );
+            }
+            let flags = PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS;
+            let res = unsafe {
+                pw_stream_connect(
+                    stream,
+                    PW_DIRECTION_INPUT,
+                    PW_ID_ANY,
+                    flags,
+                    ptr::null_mut(),
+                    0,
+                )
+            };
+            if res < 0 {
+                unsafe {
+                    pw_stream_destroy(stream);
+                }
+                return Err(ScreenError::Backend(format!(
+                    "connect PipeWire stream: {res}"
+                )));
+            }
+
+            Ok(Self {
+                stream,
+                listener,
+                events,
+                data,
+                loop_: connection.loop_,
+            })
+        }
+
+        fn iterate(&self, timeout_ms: i32) -> Result<(), ScreenError> {
+            let res = unsafe { pw_loop_iterate(self.loop_, timeout_ms) };
+            if res < 0 {
+                return Err(ScreenError::Backend(format!(
+                    "iterate PipeWire loop: {res}"
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for PipeWireStream {
+        fn drop(&mut self) {
+            let _ = &self.listener;
+            let _ = &self.events;
+            let _ = &self.data;
+            unsafe {
+                pw_stream_destroy(self.stream);
+            }
+        }
+    }
+
+    fn stream_properties(request: &PipeWireFrameRequest) -> Result<*mut PwProperties, ScreenError> {
+        let empty = CString::new("{}")
+            .map_err(|error| ScreenError::Backend(format!("PipeWire props json: {error}")))?;
+        let props = unsafe { pw_properties_new_string(empty.as_ptr()) };
+        if props.is_null() {
+            return Err(ScreenError::Backend(
+                "create PipeWire stream properties".into(),
+            ));
+        }
+
+        set_property(props, "application.name", "NexKVM")?;
+        set_property(props, "media.type", "Video")?;
+        set_property(props, "media.category", "Capture")?;
+        set_property(props, "media.role", "Screen")?;
+        set_property(props, "target.object", &request.target.target_object())?;
+        Ok(props)
+    }
+
+    fn set_property(props: *mut PwProperties, key: &str, value: &str) -> Result<(), ScreenError> {
+        let key = CString::new(key)
+            .map_err(|error| ScreenError::Backend(format!("PipeWire property key: {error}")))?;
+        let value = CString::new(value)
+            .map_err(|error| ScreenError::Backend(format!("PipeWire property value: {error}")))?;
+        let res = unsafe { pw_properties_set(props, key.as_ptr(), value.as_ptr()) };
+        if res < 0 {
+            return Err(ScreenError::Backend(format!(
+                "set PipeWire property {}: {res}",
+                key.to_string_lossy()
+            )));
+        }
+        Ok(())
+    }
+
+    extern "C" fn on_stream_process(data: *mut c_void) {
+        let data = unsafe { &mut *data.cast::<NativeStreamData>() };
+        match unsafe { dequeue_stream_frame(data) } {
+            Ok(Some(frame)) => {
+                let _ = data.sender.try_send(Ok(frame));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = data.sender.try_send(Err(error));
+            }
+        }
+    }
+
+    extern "C" fn on_stream_param_changed(data: *mut c_void, _id: u32, param: *const SpaPod) {
+        if param.is_null() {
+            return;
+        }
+        let data = unsafe { &mut *data.cast::<NativeStreamData>() };
+        match PipeWireFrameFormat::fixate(
+            data.request.resolution,
+            &[
+                PipeWireVideoFormat::Bgra,
+                PipeWireVideoFormat::Rgba,
+                PipeWireVideoFormat::Nv12,
+            ],
+        ) {
+            Ok(format) => {
+                data.format = format;
+                data.format_negotiated = true;
+            }
+            Err(error) => {
+                let _ = data.sender.try_send(Err(error.to_string()));
+            }
+        }
+    }
+
+    unsafe fn dequeue_stream_frame(
+        data: &mut NativeStreamData,
+    ) -> Result<Option<PipeWireRawFrame>, String> {
+        let buffer = unsafe { pw_stream_dequeue_buffer(data.stream) };
+        if buffer.is_null() {
+            return Ok(None);
+        }
+
+        let frame = extract_frame_from_pw_buffer(data, buffer);
+        unsafe {
+            let _ = pw_stream_queue_buffer(data.stream, buffer);
+        }
+        frame.map(Some)
+    }
+
+    fn extract_frame_from_pw_buffer(
+        data: &mut NativeStreamData,
+        buffer: *mut PwBuffer,
+    ) -> Result<PipeWireRawFrame, String> {
+        let spa = unsafe { (*buffer).buffer };
+        if spa.is_null() {
+            return Err("PipeWire buffer did not include a SPA buffer".into());
+        }
+        let spa = unsafe { &*spa };
+        if spa.n_datas == 0 || spa.datas.is_null() {
+            return Err("PipeWire SPA buffer had no data planes".into());
+        }
+
+        let plane = unsafe { &*spa.datas };
+        let chunk = if plane.chunk.is_null() {
+            return Err("PipeWire SPA data plane had no chunk".into());
+        } else {
+            unsafe { &*plane.chunk }
+        };
+        let maxsize = usize::try_from(plane.maxsize)
+            .map_err(|_| "PipeWire data plane maxsize overflow".to_string())?;
+        let chunk_offset = if maxsize == 0 {
+            0
+        } else {
+            usize::try_from(chunk.offset)
+                .map_err(|_| "PipeWire chunk offset overflow".to_string())?
+                % maxsize
+        };
+        let chunk_size = usize::try_from(chunk.size)
+            .map_err(|_| "PipeWire chunk size overflow".to_string())?
+            .min(maxsize.saturating_sub(chunk_offset));
+
+        let bytes = if plane.data.is_null() {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(plane.data.cast::<u8>(), maxsize) }
+        };
+        let frame = pipewire_frame_from_mapped_buffer(
+            PipeWireMappedBuffer {
+                bytes,
+                chunk_offset,
+                chunk_size,
+                fd: (plane.fd >= 0).then_some(plane.fd),
+            },
+            data.request.clone(),
+            data.format,
+            data.sequence,
+            unsafe { (*buffer).time / 1_000 },
+        )
+        .map_err(|error| error.to_string())?;
+        data.sequence = data.sequence.saturating_add(1);
+        Ok(frame)
     }
 }
 
@@ -994,5 +1623,69 @@ mod tests {
         assert!(
             matches!(error, nexkvm_streaming::ScreenError::Codec(message) if message.contains("payload"))
         );
+    }
+
+    #[test]
+    fn pipewire_mapped_buffer_extracts_chunk_with_offset_and_size() {
+        let frame = pipewire_frame_from_mapped_buffer(
+            PipeWireMappedBuffer {
+                bytes: &[9, 8, 1, 2, 3, 4, 7],
+                chunk_offset: 2,
+                chunk_size: 4,
+                fd: None,
+            },
+            PipeWireFrameRequest {
+                target: PipeWireStreamTarget::ObjectSerial(9001),
+                resolution: ScreenResolution::new(1, 1),
+                memory: GpuMemoryKind::System,
+            },
+            PipeWireFrameFormat {
+                resolution: ScreenResolution::new(1, 1),
+                video_format: PipeWireVideoFormat::Bgra,
+                pixel_format: PixelFormat::Bgra8,
+                stride: 4,
+            },
+            12,
+            3456,
+        )
+        .expect("mapped frame");
+
+        assert_eq!(frame.sequence, 12);
+        assert_eq!(frame.capture_time_micros, 3456);
+        assert_eq!(frame.resolution, ScreenResolution::new(1, 1));
+        assert_eq!(frame.pixel_format, PixelFormat::Bgra8);
+        assert_eq!(frame.memory, GpuMemoryKind::System);
+        assert_eq!(frame.payload, bytes::Bytes::from_static(&[1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn pipewire_frame_format_fixates_bgra_stride_from_request() {
+        let format = PipeWireFrameFormat::fixate(
+            ScreenResolution::new(7, 5),
+            &[PipeWireVideoFormat::Nv12, PipeWireVideoFormat::Bgra],
+        )
+        .expect("format");
+
+        assert_eq!(format.resolution, ScreenResolution::new(7, 5));
+        assert_eq!(format.video_format, PipeWireVideoFormat::Bgra);
+        assert_eq!(format.pixel_format, PixelFormat::Bgra8);
+        assert_eq!(format.stride, 28);
+        assert_eq!(format.system_payload_len(), Some(140));
+    }
+
+    #[test]
+    fn pipewire_frame_format_maps_parsed_spa_raw_info() {
+        let format = PipeWireFrameFormat::from_spa_raw_info(PipeWireSpaRawVideoInfo {
+            spa_format: SPA_VIDEO_FORMAT_RGBA,
+            width: 1280,
+            height: 720,
+            stride: Some(1280 * 4),
+        })
+        .expect("format");
+
+        assert_eq!(format.resolution, ScreenResolution::new(1280, 720));
+        assert_eq!(format.video_format, PipeWireVideoFormat::Rgba);
+        assert_eq!(format.pixel_format, PixelFormat::Rgba8);
+        assert_eq!(format.stride, 5120);
     }
 }

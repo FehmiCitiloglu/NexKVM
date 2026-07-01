@@ -303,8 +303,16 @@ planned.
   capability reporting, permission grant flow, and display/window source
   listing; `pipewire-serial`/portal/node stream targeting and raw PipeWire frame
   validation into `ScreenFrame` are implemented behind a `PipeWireFrameReader`
-  boundary; Linux-only native `pw_context_connect_fd` scaffold is present;
-  PipeWire stream process/dequeue buffer pump is pending).
+  boundary; Linux-only native `pw_context_connect_fd` + `pw_stream_new` /
+  `pw_stream_connect` pump is present with `target.object`, bounded loop
+  iteration, process callback, `pw_stream_dequeue_buffer` /
+  `pw_stream_queue_buffer`, SPA chunk extraction, mapped System payload copy,
+  and DMA-BUF handle payload shaping; raw format model/fixation covers
+  BGRA/RGBA/NV12, stride and expected system payload sizing are tracked, and
+  native `param_changed` is hooked into deterministic NexKVM format fixation;
+  parsed `spa_video_info_raw` format/size/stride mapping is modeled for
+  RGBA/RGBx/BGRA/BGRx/NV12; extracting that raw info from the incoming SPA pod
+  and real Wayland smoke coverage are pending).
 - [ ] Linux PipeWire audio routing backend.
 - [ ] Linux X11 input and clipboard fallback implementation.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.

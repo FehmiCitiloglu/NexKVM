@@ -25,8 +25,10 @@ pub mod portal_input;
 pub use clipboard::LinuxClipboard;
 pub use pipewire_screen::{
     LinuxPipeWireScreenCapture, NativePipeWireFrameReader, PendingPipeWireFrameReader,
-    PipeWireFrameReader, PipeWireFrameRequest, PipeWireRawFrame, PipeWireRemoteFd,
-    PipeWireScreenCastSession, PipeWireScreenCastStream, PipeWireStreamTarget,
+    PipeWireFrameFormat, PipeWireFrameReader, PipeWireFrameRequest, PipeWireMappedBuffer,
+    PipeWireRawFrame, PipeWireRemoteFd, PipeWireScreenCastSession, PipeWireScreenCastStream,
+    PipeWireSpaRawVideoInfo, PipeWireStreamTarget, PipeWireVideoFormat, SPA_VIDEO_FORMAT_BGRA,
+    SPA_VIDEO_FORMAT_BGRX, SPA_VIDEO_FORMAT_NV12, SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBX,
     XdgDesktopPortalScreenCastTransport, ZbusXdgDesktopPortalScreenCastTransport,
 };
 pub use portal_input::{
