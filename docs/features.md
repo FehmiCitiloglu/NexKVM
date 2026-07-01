@@ -30,6 +30,8 @@ planned.
 - [x] GUI-managed daemon start preflight that detects a busy listen port, stops
   a stale local `nexkvm` daemon process, and refuses startup if the port remains
   occupied.
+- [x] GUI notification center for daemon lifecycle, configuration, command,
+  permission, and pairing status events.
 - [x] Future mobile companion placeholder crate for Android and iOS targets.
 - [x] Platform-specific crate boundaries for macOS, Linux, and Windows.
 
@@ -320,7 +322,9 @@ planned.
 - [ ] Shared cursor collaboration.
 - [ ] Pair programming collaborative control flow.
 - [ ] Remote teaching/control leases with revocation UI.
-- [ ] Cross-device notifications surfaced in UI.
+- [~] Cross-device notifications surfaced in UI (GUI notification center exists
+  for local runtime events; trusted-peer notification ingestion remains
+  planned).
 - [ ] Quick command palette UI.
 - [ ] Automation scripting runtime.
 

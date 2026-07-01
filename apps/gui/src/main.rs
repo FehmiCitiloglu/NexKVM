@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::PathBuf;
@@ -32,6 +33,8 @@ struct NexkvmGui {
     pairing_uri: String,
     accept_uri: String,
     command_output: String,
+    notifications: VecDeque<GuiNotification>,
+    next_notification_id: u64,
 }
 
 impl NexkvmGui {
@@ -50,13 +53,23 @@ impl NexkvmGui {
             pairing_uri: String::new(),
             accept_uri: String::new(),
             command_output: String::new(),
+            notifications: initial_notifications(),
+            next_notification_id: 1,
         }
     }
 
     fn save_config(&mut self) {
         match self.config.save(&self.config_path) {
-            Ok(()) => self.status = format!("Saved {}", self.config_path.display()),
-            Err(error) => self.status = format!("Save failed: {error}"),
+            Ok(()) => self.set_status(
+                NotificationUrgency::Normal,
+                "Settings saved",
+                format!("Saved {}", self.config_path.display()),
+            ),
+            Err(error) => self.set_status(
+                NotificationUrgency::High,
+                "Settings save failed",
+                format!("Save failed: {error}"),
+            ),
         }
     }
 
@@ -64,7 +77,11 @@ impl NexkvmGui {
         match self.config.save(&self.config_path) {
             Ok(()) => true,
             Err(error) => {
-                self.status = format!("Save failed: {error}");
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Settings save failed",
+                    format!("Save failed: {error}"),
+                );
                 false
             }
         }
@@ -80,17 +97,33 @@ impl NexkvmGui {
                 } else {
                     format!("{stdout}\n{stderr}")
                 };
-                self.status = format!("Command exited: {}", output.status);
+                self.set_status(
+                    if output.status.success() {
+                        NotificationUrgency::Normal
+                    } else {
+                        NotificationUrgency::High
+                    },
+                    "Command finished",
+                    format!("Command exited: {}", output.status),
+                );
             }
             Err(error) => {
-                self.status = format!("Command failed: {error}");
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Command failed",
+                    format!("Command failed: {error}"),
+                );
             }
         }
     }
 
     fn start_daemon(&mut self) {
         if self.daemon.is_some() {
-            self.status = "Daemon already started from this window".into();
+            self.set_status(
+                NotificationUrgency::Low,
+                "Daemon already running",
+                "Daemon already started from this window",
+            );
             return;
         }
         if !self.persist_config() {
@@ -98,15 +131,26 @@ impl NexkvmGui {
         }
         let listen_port = self.config.network.listen_port;
         if !daemon_listen_port_available(listen_port) {
-            self.status = format!("Port {listen_port} is busy; stopping existing nexkvm daemon...");
+            self.set_status(
+                NotificationUrgency::High,
+                "Listen port busy",
+                format!("Port {listen_port} is busy; stopping existing nexkvm daemon..."),
+            );
             if let Err(error) = kill_existing_daemon_process() {
-                self.status =
-                    format!("Port {listen_port} is busy and nexkvm could not be stopped: {error}");
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Daemon stop failed",
+                    format!("Port {listen_port} is busy and nexkvm could not be stopped: {error}"),
+                );
                 return;
             }
             if !wait_for_daemon_listen_port_available(listen_port) {
-                self.status = format!(
-                    "Port {listen_port} is still busy after stopping nexkvm; daemon not started"
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Listen port still busy",
+                    format!(
+                        "Port {listen_port} is still busy after stopping nexkvm; daemon not started"
+                    ),
                 );
                 return;
             }
@@ -118,14 +162,22 @@ impl NexkvmGui {
         {
             Ok(file) => file,
             Err(error) => {
-                self.status = format!("Failed to open daemon log: {error}");
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Daemon log failed",
+                    format!("Failed to open daemon log: {error}"),
+                );
                 return;
             }
         };
         let stderr_log = match log_file.try_clone() {
             Ok(file) => file,
             Err(error) => {
-                self.status = format!("Failed to open daemon log: {error}");
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Daemon log failed",
+                    format!("Failed to open daemon log: {error}"),
+                );
                 return;
             }
         };
@@ -137,9 +189,17 @@ impl NexkvmGui {
         {
             Ok(child) => {
                 self.daemon = Some(child);
-                self.status = format!("Daemon started; log {}", self.daemon_log_path.display());
+                self.set_status(
+                    NotificationUrgency::Normal,
+                    "Daemon started",
+                    format!("Daemon started; log {}", self.daemon_log_path.display()),
+                );
             }
-            Err(error) => self.status = format!("Failed to start daemon: {error}"),
+            Err(error) => self.set_status(
+                NotificationUrgency::High,
+                "Daemon start failed",
+                format!("Failed to start daemon: {error}"),
+            ),
         }
     }
 
@@ -147,16 +207,51 @@ impl NexkvmGui {
         if let Some(mut child) = self.daemon.take() {
             let _ = child.kill();
             let _ = child.wait();
-            self.status = "Daemon stopped".into();
+            self.set_status(
+                NotificationUrgency::Normal,
+                "Daemon stopped",
+                "Daemon stopped",
+            );
             return;
         }
         match run_daemon_kill_command() {
-            Ok(output) if output.status.success() => self.status = "Daemon stopped".into(),
-            Ok(output) => {
-                self.status = format!("Stop command exited: {}", output.status);
+            Ok(output) if output.status.success() => {
+                self.set_status(
+                    NotificationUrgency::Normal,
+                    "Daemon stopped",
+                    "Daemon stopped",
+                );
             }
-            Err(error) => self.status = format!("Stop failed: {error}"),
+            Ok(output) => {
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Stop command finished",
+                    format!("Stop command exited: {}", output.status),
+                );
+            }
+            Err(error) => self.set_status(
+                NotificationUrgency::High,
+                "Stop failed",
+                format!("Stop failed: {error}"),
+            ),
         }
+    }
+
+    fn set_status(
+        &mut self,
+        urgency: NotificationUrgency,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) {
+        let body = body.into();
+        self.status = body.clone();
+        record_notification(
+            &mut self.notifications,
+            &mut self.next_notification_id,
+            urgency,
+            title,
+            body,
+        );
     }
 }
 
@@ -165,6 +260,22 @@ enum Section {
     Overview,
     Settings,
     Pairing,
+    Notifications,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotificationUrgency {
+    Low,
+    Normal,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GuiNotification {
+    id: u64,
+    urgency: NotificationUrgency,
+    title: String,
+    body: String,
 }
 
 impl eframe::App for NexkvmGui {
@@ -195,6 +306,12 @@ impl eframe::App for NexkvmGui {
                 nav_item(ui, &mut self.section, Section::Overview, "Overview");
                 nav_item(ui, &mut self.section, Section::Settings, "Settings");
                 nav_item(ui, &mut self.section, Section::Pairing, "Pairing & Output");
+                nav_item(
+                    ui,
+                    &mut self.section,
+                    Section::Notifications,
+                    "Notifications",
+                );
 
                 ui.add_space(24.0);
                 status_panel(ui, self.daemon.is_some(), &self.status);
@@ -220,6 +337,7 @@ impl eframe::App for NexkvmGui {
                     Section::Overview => self.overview_page(ui),
                     Section::Settings => self.settings_page(ui),
                     Section::Pairing => self.pairing_page(ui),
+                    Section::Notifications => self.notifications_page(ui),
                 });
         });
     }
@@ -233,7 +351,11 @@ impl NexkvmGui {
             .and_then(|child| child.try_wait().ok().flatten());
         if let Some(status) = exit_status {
             self.daemon = None;
-            self.status = format!("Daemon exited: {status}");
+            self.set_status(
+                NotificationUrgency::High,
+                "Daemon exited",
+                format!("Daemon exited: {status}"),
+            );
             self.command_output = read_log_tail(&self.daemon_log_path, 16_000);
             self.section = Section::Pairing;
         }
@@ -369,18 +491,25 @@ impl NexkvmGui {
                 metric_row(ui, "Handoff", edge_label(self.config.input.handoff_edge));
             }),
             2 => card(ui, card_width, |ui| {
-                card_title(ui, "Safety");
+                card_title(ui, "Events");
                 ui.add_space(6.0);
                 metric_row(
                     ui,
-                    "Emergency key",
-                    emergency_label(self.config.input.emergency_stop_keycode).as_str(),
+                    "Unread",
+                    &self
+                        .notifications
+                        .iter()
+                        .filter(|notification| notification.urgency != NotificationUrgency::Low)
+                        .count()
+                        .to_string(),
                 );
-                metric_row(
-                    ui,
-                    "Focus timeout",
-                    &format!("{} ms", self.config.input.remote_focus_timeout_millis),
-                );
+                if let Some(notification) = self.notifications.front() {
+                    metric_row(ui, "Latest", &notification.title);
+                    metric_row(ui, "Level", urgency_label(notification.urgency));
+                } else {
+                    metric_row(ui, "Latest", "None");
+                    metric_row(ui, "Level", "Low");
+                }
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
                     if secondary_button(ui, "Doctor").clicked() {
@@ -390,6 +519,9 @@ impl NexkvmGui {
                     if secondary_button(ui, "Permissions").clicked() {
                         self.run_command(&["permissions"]);
                         self.section = Section::Pairing;
+                    }
+                    if secondary_button(ui, "View all").clicked() {
+                        self.section = Section::Notifications;
                     }
                 });
             }),
@@ -410,6 +542,22 @@ impl NexkvmGui {
             ui.label(muted_text(
                 "Move across the configured edge to hand control to the paired target.",
             ));
+        });
+
+        ui.add_space(16.0);
+        card(ui, ui.available_width() - 8.0, |ui| {
+            card_title(ui, "Safety");
+            ui.add_space(6.0);
+            metric_row(
+                ui,
+                "Emergency key",
+                emergency_label(self.config.input.emergency_stop_keycode).as_str(),
+            );
+            metric_row(
+                ui,
+                "Focus timeout",
+                &format!("{} ms", self.config.input.remote_focus_timeout_millis),
+            );
         });
     }
 
@@ -498,9 +646,21 @@ impl NexkvmGui {
                         Ok(output) => {
                             self.pairing_uri =
                                 String::from_utf8_lossy(&output.stdout).trim().to_string();
-                            self.status = format!("Command exited: {}", output.status);
+                            self.set_status(
+                                if output.status.success() {
+                                    NotificationUrgency::Normal
+                                } else {
+                                    NotificationUrgency::High
+                                },
+                                "Pairing URI generated",
+                                format!("Command exited: {}", output.status),
+                            );
                         }
-                        Err(error) => self.status = format!("Pairing URI failed: {error}"),
+                        Err(error) => self.set_status(
+                            NotificationUrgency::High,
+                            "Pairing URI failed",
+                            format!("Pairing URI failed: {error}"),
+                        ),
                     }
                 }
                 ui.add_space(8.0);
@@ -548,6 +708,33 @@ impl NexkvmGui {
             );
         });
     }
+
+    fn notifications_page(&mut self, ui: &mut egui::Ui) {
+        card(ui, ui.available_width() - 8.0, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                card_title(ui, "Notification center");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if secondary_button(ui, "Clear").clicked() {
+                        self.notifications.clear();
+                        self.set_status(
+                            NotificationUrgency::Low,
+                            "Notifications cleared",
+                            "Notification center cleared",
+                        );
+                    }
+                });
+            });
+            ui.add_space(10.0);
+            if self.notifications.is_empty() {
+                ui.label(muted_text("No recent runtime events."));
+            } else {
+                for notification in &self.notifications {
+                    notification_row(ui, notification);
+                    ui.add_space(8.0);
+                }
+            }
+        });
+    }
 }
 
 fn apply_theme(ctx: &egui::Context) {
@@ -573,6 +760,10 @@ fn page_header(ui: &mut egui::Ui, section: Section, device_name: &str) {
         Section::Pairing => (
             "Pairing & Output",
             "Pair devices and inspect command results.",
+        ),
+        Section::Notifications => (
+            "Notifications",
+            "Runtime events, command results and peer-readiness signals.",
         ),
     };
     if ui.available_width() < 520.0 {
@@ -656,6 +847,79 @@ fn status_chip(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
                     .color(egui::Color32::WHITE),
             );
         });
+}
+
+const MAX_GUI_NOTIFICATIONS: usize = 24;
+
+fn initial_notifications() -> VecDeque<GuiNotification> {
+    let mut notifications = VecDeque::new();
+    let mut next_id = 0;
+    record_notification(
+        &mut notifications,
+        &mut next_id,
+        NotificationUrgency::Low,
+        "GUI ready",
+        "NexKVM control panel is ready",
+    );
+    notifications
+}
+
+fn record_notification(
+    notifications: &mut VecDeque<GuiNotification>,
+    next_id: &mut u64,
+    urgency: NotificationUrgency,
+    title: impl Into<String>,
+    body: impl Into<String>,
+) {
+    notifications.push_front(GuiNotification {
+        id: *next_id,
+        urgency,
+        title: title.into(),
+        body: body.into(),
+    });
+    *next_id = next_id.saturating_add(1);
+    while notifications.len() > MAX_GUI_NOTIFICATIONS {
+        notifications.pop_back();
+    }
+}
+
+fn notification_row(ui: &mut egui::Ui, notification: &GuiNotification) {
+    egui::Frame::default()
+        .fill(egui::Color32::from_rgb(23, 29, 39))
+        .stroke(egui::Stroke::new(
+            1.0,
+            urgency_color(notification.urgency).linear_multiply(0.75),
+        ))
+        .inner_margin(12.0)
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.colored_label(urgency_color(notification.urgency), "●");
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(&notification.title)
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    );
+                    ui.label(muted_text(notification.body.as_str()));
+                });
+            });
+        });
+}
+
+fn urgency_label(urgency: NotificationUrgency) -> &'static str {
+    match urgency {
+        NotificationUrgency::Low => "Low",
+        NotificationUrgency::Normal => "Normal",
+        NotificationUrgency::High => "High",
+    }
+}
+
+fn urgency_color(urgency: NotificationUrgency) -> egui::Color32 {
+    match urgency {
+        NotificationUrgency::Low => egui::Color32::from_rgb(151, 162, 178),
+        NotificationUrgency::Normal => egui::Color32::from_rgb(91, 199, 132),
+        NotificationUrgency::High => egui::Color32::from_rgb(238, 184, 82),
+    }
 }
 
 fn app_mark(ui: &mut egui::Ui) {
@@ -1303,5 +1567,37 @@ mod tests {
         drop(listener);
 
         assert!(tcp_port_available(addr));
+    }
+
+    #[test]
+    fn gui_notifications_keep_newest_events() {
+        let mut notifications = VecDeque::new();
+        let mut next_id = 0;
+
+        for index in 0..(MAX_GUI_NOTIFICATIONS + 3) {
+            record_notification(
+                &mut notifications,
+                &mut next_id,
+                NotificationUrgency::Normal,
+                format!("event {index}"),
+                "body",
+            );
+        }
+
+        assert_eq!(notifications.len(), MAX_GUI_NOTIFICATIONS);
+        assert_eq!(notifications.front().unwrap().title, "event 26");
+        assert_eq!(notifications.back().unwrap().title, "event 3");
+    }
+
+    #[test]
+    fn initial_notification_marks_gui_ready() {
+        let notifications = initial_notifications();
+
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications.front().unwrap().title, "GUI ready");
+        assert_eq!(
+            notifications.front().unwrap().urgency,
+            NotificationUrgency::Low
+        );
     }
 }
