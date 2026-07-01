@@ -76,6 +76,9 @@ flate2 = "1"
 # Clipboard (platform-specific backends)
 clipboard-win = "5"
 arboard = "3"
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+zvariant = "4.2"
+reis = { version = "0.7", default-features = false, features = ["tokio"] }
 
 # Internal crates
 nexkvm-protocol = { path = "crates/protocol" }

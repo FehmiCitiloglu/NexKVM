@@ -287,8 +287,15 @@ planned.
   H.264/H.265 through `VTCompressionSession`, and returns stream-ready encoded
   payloads).
 - [~] Linux Wayland portal-mediated input capture and injection (daemon-facing
-  portal session boundary, grant gating, capture/injection traits, and tests are
-  implemented; concrete xdg-desktop-portal D-Bus/libei client remains planned).
+  portal session boundary, grant gating, capture/injection traits, and concrete
+  zbus xdg-desktop-portal RemoteDesktop/InputCapture transport are implemented;
+  InputCapture pointer-barrier lifecycle is modeled through `GetZones`,
+  `SetPointerBarriers`, and `Enable`; `ConnectToEIS` fd is retained for an EIS
+  decoder backend; Request response parsing is wired for zone sets and rejected
+  barriers; `ReisPortalEisEventDecoder` opens the portal fd as a receiver
+  context and maps pointer, scroll, button, and keyboard EIS events to NexKVM
+  input events; `nexkvm portal-smoke` exercises the grant, first-zone right-edge
+  barrier, and EIS event path on real Linux Wayland sessions).
 - [ ] Linux PipeWire screen capture.
 - [ ] Linux PipeWire audio routing backend.
 - [ ] Linux X11 input and clipboard fallback implementation.

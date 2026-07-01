@@ -19,6 +19,8 @@ pub enum Command {
     Doctor,
     /// Prompt/report platform permissions needed by native integrations.
     Permissions,
+    /// Run a Linux Wayland portal input smoke diagnostic.
+    PortalSmoke,
     /// Print protocol compatibility info.
     Protocol,
     /// Print the resolved config path.
@@ -86,6 +88,12 @@ where
         None => Command::Run,
         Some("doctor") => Command::Doctor,
         Some("permissions") => Command::Permissions,
+        Some("portal-smoke") => {
+            if it.next().is_some() {
+                return Err("portal-smoke accepts no arguments".to_string());
+            }
+            Command::PortalSmoke
+        }
         Some("protocol") => Command::Protocol,
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
@@ -157,6 +165,7 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm pair [--accept] <uri> Decode or accept a pairing bootstrap\n");
     out.push_str("  nexkvm pairing-uri <addr>  Print this device's pairing bootstrap URI\n");
     out.push_str("  nexkvm permissions         Request/report required macOS permissions\n");
+    out.push_str("  nexkvm portal-smoke       Test Linux Wayland portal grant/barrier/EIS flow\n");
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
@@ -341,6 +350,15 @@ mod tests {
             Command::Permissions
         );
         assert!(help_text().contains("nexkvm permissions"));
+    }
+
+    #[test]
+    fn portal_smoke_command_is_parsed() {
+        assert_eq!(
+            parse(["portal-smoke"]).unwrap().command,
+            Command::PortalSmoke
+        );
+        assert!(help_text().contains("nexkvm portal-smoke"));
     }
 
     #[test]

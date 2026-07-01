@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Run => return run_daemon(invocation.debug).await,
         Command::Doctor => return doctor(),
         Command::Permissions => return permissions().await,
+        Command::PortalSmoke => return portal_smoke().await,
         Command::Protocol => return protocol_info(),
         Command::ConfigPath => {
             println!("{}", config_path().display());
@@ -835,6 +836,75 @@ async fn permissions() -> anyhow::Result<()> {
     #[cfg(not(target_os = "macos"))]
     {
         println!("  no interactive permission prompt is available on this platform yet");
+    }
+    Ok(())
+}
+
+async fn portal_smoke() -> anyhow::Result<()> {
+    println!("nexkvm portal-smoke");
+    #[cfg(target_os = "linux")]
+    {
+        use anyhow::Context as _;
+        use nexkvm_platform_linux::{
+            PortalInputGrant, ReisPortalEisEventDecoder, WaylandPortalInputClient,
+            XdgDesktopPortalInputClient, ZbusXdgDesktopPortalInputTransport,
+        };
+        use tokio::time::{Duration, timeout};
+
+        println!("  transport: xdg-desktop-portal session bus");
+        let transport = ZbusXdgDesktopPortalInputTransport::session()
+            .await
+            .context("connect xdg-desktop-portal session bus")?;
+        let client = XdgDesktopPortalInputClient::with_event_decoder(
+            transport,
+            ReisPortalEisEventDecoder::default(),
+        );
+
+        println!("  grant: requesting RemoteDesktop + InputCapture");
+        let grant = client
+            .request_input_session(PortalInputGrant {
+                remote_desktop: true,
+                input_capture: true,
+            })
+            .await
+            .context("request portal input session")?;
+        println!(
+            "  grant: remote_desktop={} input_capture={}",
+            grant.remote_desktop, grant.input_capture
+        );
+
+        let zones = client
+            .configure_first_zone_right_edge_barrier()
+            .await
+            .context("configure first-zone right-edge pointer barrier")?;
+        println!(
+            "  zones: {} zone(s), zone_set={}",
+            zones.zones.len(),
+            zones.id
+        );
+        if let Some(zone) = zones.zones.first() {
+            println!(
+                "  barrier: first zone right edge x={} y={}..{}",
+                zone.x + i32::try_from(zone.width.saturating_sub(1)).unwrap_or(i32::MAX),
+                zone.y,
+                zone.y + i32::try_from(zone.height.saturating_sub(1)).unwrap_or(i32::MAX)
+            );
+        }
+
+        println!("  event: waiting up to 10s for an EIS input event");
+        match timeout(Duration::from_secs(10), client.next_event()).await {
+            Ok(Ok(event)) => println!("  event: {event:?}"),
+            Ok(Err(error)) => anyhow::bail!("portal EIS event failed: {error}"),
+            Err(_) => anyhow::bail!(
+                "timed out waiting for EIS input event; move the pointer through the configured edge barrier"
+            ),
+        }
+        println!("  status: ok");
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        println!("  status: unavailable");
+        println!("  reason: Linux Wayland portal smoke is only available on Linux targets");
     }
     Ok(())
 }

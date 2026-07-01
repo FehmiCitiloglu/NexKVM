@@ -22,7 +22,12 @@ pub mod inject;
 pub mod portal_input;
 
 pub use clipboard::LinuxClipboard;
-pub use portal_input::{LinuxWaylandPortalInput, PortalInputGrant, WaylandPortalInputClient};
+pub use portal_input::{
+    LinuxWaylandPortalInput, PortalEisConnection, PortalEisEventDecoder, PortalEisFd,
+    PortalInputGrant, PortalInputZone, PortalNotifyMethod, PortalPointerBarrier, PortalZoneSet,
+    ReisPortalEisEventDecoder, WaylandPortalInputClient, XdgDesktopPortalInputClient,
+    XdgDesktopPortalInputTransport, ZbusXdgDesktopPortalInputTransport,
+};
 
 /// Display/session family detected for Linux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

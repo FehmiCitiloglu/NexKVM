@@ -20,3 +20,8 @@ tracing.workspace = true
 bytes.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 arboard = "3"
+zbus.workspace = true
+zvariant.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+reis.workspace = true
