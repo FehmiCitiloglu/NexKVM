@@ -351,6 +351,45 @@ pub trait AudioBackend: Send + Sync {
     fn preferred_format(&self) -> AudioFormat;
 }
 
+/// Platform audio stream boundary for frame capture and playback.
+///
+/// Implementors own the OS-specific stream pump (PipeWire streams, CoreAudio
+/// callbacks, WASAPI clients) and expose one frame-at-a-time operations to the
+/// routing/session layer.
+#[async_trait]
+pub trait AudioStreamBackend: Send + Sync {
+    /// Capture one audio frame from `device`.
+    async fn capture_audio_frame(&self, device: &AudioDeviceId) -> Result<AudioFrame, AudioError>;
+
+    /// Play one audio frame to `device`.
+    async fn play_audio_frame(
+        &self,
+        device: &AudioDeviceId,
+        frame: AudioFrame,
+    ) -> Result<(), AudioError>;
+}
+
+/// Capture one frame from `source` and deliver it to `sink`.
+///
+/// This is intentionally sans-I/O orchestration: platform implementations
+/// provide capture/playback, while session code can use this as the smallest
+/// testable routing unit.
+///
+/// # Errors
+/// Returns any capture or playback error from the backend.
+pub async fn route_audio_frame_once<B>(
+    backend: &B,
+    source: &AudioDeviceId,
+    sink: &AudioDeviceId,
+) -> Result<AudioFrame, AudioError>
+where
+    B: AudioStreamBackend + ?Sized,
+{
+    let frame = backend.capture_audio_frame(source).await?;
+    backend.play_audio_frame(sink, frame.clone()).await?;
+    Ok(frame)
+}
+
 fn codec_to_u8(codec: AudioCodec) -> u8 {
     match codec {
         AudioCodec::Pcm => 0,
@@ -444,5 +483,62 @@ mod tests {
     #[test]
     fn format_reports_samples_per_frame() {
         assert_eq!(AudioFormat::opus_stereo_48k().samples_per_frame(), 480);
+    }
+
+    #[tokio::test]
+    async fn routes_one_captured_audio_frame_to_playback_endpoint() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug, Clone)]
+        struct LoopbackStream {
+            captured: AudioFrame,
+            played: Arc<Mutex<Vec<(AudioDeviceId, AudioFrame)>>>,
+        }
+
+        #[async_trait]
+        impl AudioStreamBackend for LoopbackStream {
+            async fn capture_audio_frame(
+                &self,
+                _device: &AudioDeviceId,
+            ) -> Result<AudioFrame, AudioError> {
+                Ok(self.captured.clone())
+            }
+
+            async fn play_audio_frame(
+                &self,
+                device: &AudioDeviceId,
+                frame: AudioFrame,
+            ) -> Result<(), AudioError> {
+                self.played.lock().unwrap().push((device.clone(), frame));
+                Ok(())
+            }
+        }
+
+        let captured = AudioFrame {
+            sequence: 7,
+            capture_time_micros: 70,
+            samples_per_channel: 480,
+            codec: AudioCodec::Pcm,
+            payload: Bytes::from_static(b"pcm"),
+        };
+        let played = Arc::new(Mutex::new(Vec::new()));
+        let stream = LoopbackStream {
+            captured: captured.clone(),
+            played: played.clone(),
+        };
+
+        let routed = route_audio_frame_once(
+            &stream,
+            &AudioDeviceId::new("capture"),
+            &AudioDeviceId::new("playback"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(routed, captured);
+        assert_eq!(
+            played.lock().unwrap().as_slice(),
+            &[(AudioDeviceId::new("playback"), captured)]
+        );
     }
 }

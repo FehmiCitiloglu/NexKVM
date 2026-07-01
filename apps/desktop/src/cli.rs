@@ -23,6 +23,11 @@ pub enum Command {
     PortalSmoke,
     /// Run a Linux PipeWire ScreenCast smoke diagnostic.
     PipeWireSmoke,
+    /// Run a Linux PipeWire audio graph smoke diagnostic.
+    AudioSmoke {
+        /// Optional `pipewire-node:<id>` playback endpoint to set as default.
+        set_default: Option<String>,
+    },
     /// Print protocol compatibility info.
     Protocol,
     /// Print the resolved config path.
@@ -102,6 +107,7 @@ where
             }
             Command::PipeWireSmoke
         }
+        Some("audio-smoke") => parse_audio_smoke_args(it)?,
         Some("protocol") => Command::Protocol,
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
@@ -162,6 +168,33 @@ where
     Ok(Command::Simulate { path, json_only })
 }
 
+fn parse_audio_smoke_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut it = args.into_iter();
+    match it.next() {
+        None => Ok(Command::AudioSmoke { set_default: None }),
+        Some(flag) if flag == "--set-default" => {
+            let target = it.next().ok_or_else(|| {
+                "audio-smoke --set-default requires pipewire-node:<id>".to_string()
+            })?;
+            if it.next().is_some() {
+                return Err(
+                    "audio-smoke accepts only optional --set-default pipewire-node:<id>"
+                        .to_string(),
+                );
+            }
+            Ok(Command::AudioSmoke {
+                set_default: Some(target),
+            })
+        }
+        Some(_) => {
+            Err("audio-smoke accepts only optional --set-default pipewire-node:<id>".to_string())
+        }
+    }
+}
+
 /// Render the CLI usage text.
 #[must_use]
 pub fn help_text() -> String {
@@ -175,6 +208,7 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm permissions         Request/report required macOS permissions\n");
     out.push_str("  nexkvm portal-smoke       Test Linux Wayland portal grant/barrier/EIS flow\n");
     out.push_str("  nexkvm pipewire-smoke     Test Linux PipeWire ScreenCast portal/frame flow\n");
+    out.push_str("  nexkvm audio-smoke [--set-default pipewire-node:<id>] Test Linux PipeWire audio graph/default routing\n");
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
@@ -378,6 +412,26 @@ mod tests {
         );
         assert!(parse(["pipewire-smoke", "extra"]).is_err());
         assert!(help_text().contains("nexkvm pipewire-smoke"));
+    }
+
+    #[test]
+    fn audio_smoke_command_accepts_optional_set_default_target() {
+        assert_eq!(
+            parse(["audio-smoke"]).unwrap().command,
+            Command::AudioSmoke { set_default: None }
+        );
+        assert_eq!(
+            parse(["audio-smoke", "--set-default", "pipewire-node:41"])
+                .unwrap()
+                .command,
+            Command::AudioSmoke {
+                set_default: Some("pipewire-node:41".into())
+            }
+        );
+        assert!(parse(["audio-smoke", "--set-default"]).is_err());
+        assert!(parse(["audio-smoke", "pipewire-node:41"]).is_err());
+        assert!(parse(["audio-smoke", "--set-default", "pipewire-node:41", "extra"]).is_err());
+        assert!(help_text().contains("nexkvm audio-smoke"));
     }
 
     #[test]

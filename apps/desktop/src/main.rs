@@ -36,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Permissions => return permissions().await,
         Command::PortalSmoke => return portal_smoke().await,
         Command::PipeWireSmoke => return pipewire_smoke().await,
+        Command::AudioSmoke { set_default } => return audio_smoke(set_default).await,
         Command::Protocol => return protocol_info(),
         Command::ConfigPath => {
             println!("{}", config_path().display());
@@ -994,6 +995,74 @@ async fn pipewire_smoke() -> anyhow::Result<()> {
         println!("  reason: Linux PipeWire ScreenCast smoke is only available on Linux targets");
     }
     Ok(())
+}
+
+async fn audio_smoke(set_default: Option<String>) -> anyhow::Result<()> {
+    println!("nexkvm audio-smoke");
+    #[cfg(target_os = "linux")]
+    {
+        use anyhow::Context as _;
+        use nexkvm_platform_linux::{NativePipeWireAudioGraph, PipeWireAudioBackend};
+        use nexkvm_streaming::{AudioBackend, AudioDeviceId, AudioDeviceRole};
+
+        println!("  graph: PipeWire user-session registry");
+        let backend = PipeWireAudioBackend::new(NativePipeWireAudioGraph);
+        let devices = backend
+            .devices()
+            .await
+            .context("enumerate PipeWire audio devices")?;
+        println!("  devices: {} device(s)", devices.len());
+        for device in &devices {
+            println!("  device: {}", audio_device_label(device));
+        }
+
+        if let Some(target) = set_default {
+            let device = devices
+                .iter()
+                .find(|device| device.id.0 == target)
+                .ok_or_else(|| anyhow::anyhow!("audio device `{target}` was not enumerated"))?;
+            if !matches!(
+                device.role,
+                AudioDeviceRole::Playback | AudioDeviceRole::Duplex
+            ) {
+                anyhow::bail!("audio device `{target}` is not playback-capable");
+            }
+            backend
+                .switch_playback_device(&AudioDeviceId::new(target.clone()))
+                .await
+                .context("set default PipeWire playback device")?;
+            println!("  set-default: {target}");
+        }
+
+        println!("  status: ok");
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = set_default;
+        println!("  status: unavailable");
+        println!("  reason: Linux PipeWire audio smoke is only available on Linux targets");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn audio_device_label(device: &nexkvm_streaming::AudioDevice) -> String {
+    format!(
+        "{} role={} default={} label={}",
+        device.id.0,
+        audio_role_label(device.role),
+        device.is_default,
+        device.label
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn audio_role_label(role: nexkvm_streaming::AudioDeviceRole) -> &'static str {
+    match role {
+        nexkvm_streaming::AudioDeviceRole::Capture => "capture",
+        nexkvm_streaming::AudioDeviceRole::Playback => "playback",
+        nexkvm_streaming::AudioDeviceRole::Duplex => "duplex",
+    }
 }
 
 #[cfg(target_os = "linux")]

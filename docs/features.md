@@ -323,8 +323,14 @@ planned.
   `pipewire-node:<id>` targets behind a graph boundary; Linux-only native graph
   enumeration connects to the user PipeWire core, listens to registry
   `global`/`global_remove` events, parses SPA dict properties, and feeds the
-  shared graph snapshot; WirePlumber/default-node mutation and stream
-  capture/playback routing are pending).
+  shared graph snapshot; default playback mutation is wired through
+  WirePlumber's `wpctl set-default <node-id>` command path; `nexkvm
+  audio-smoke` enumerates the live user PipeWire audio graph and can exercise
+  playback default switching with `--set-default pipewire-node:<id>`; shared
+  `AudioStreamBackend` frame capture/playback routing is modeled and
+  `PipeWireAudioBackend` can route frames through a PipeWire stream adapter
+  boundary; native Linux `pw_stream` capture/playback wiring and live Linux
+  runtime validation are pending).
 - [ ] Linux X11 input and clipboard fallback implementation.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.

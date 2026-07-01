@@ -6,9 +6,12 @@
 
 use async_trait::async_trait;
 use nexkvm_streaming::{
-    AudioBackend, AudioDevice, AudioDeviceId, AudioDeviceRole, AudioError, AudioFormat,
+    AudioBackend, AudioDevice, AudioDeviceId, AudioDeviceRole, AudioError, AudioFormat, AudioFrame,
+    AudioStreamBackend,
 };
+use std::collections::VecDeque;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 
 /// PipeWire node interface type reported by registry global events.
 pub const PIPEWIRE_INTERFACE_NODE: &str = "PipeWire:Interface:Node";
@@ -117,21 +120,82 @@ pub trait PipeWireAudioGraph: Send + Sync {
     async fn set_default_playback(&self, node_id: u32) -> Result<(), AudioError>;
 }
 
+/// PipeWire audio frame stream access boundary.
+#[async_trait]
+pub trait PipeWireAudioStream: Send + Sync {
+    /// Capture one frame from a PipeWire audio node.
+    async fn capture_frame(
+        &self,
+        node_id: u32,
+        format: AudioFormat,
+    ) -> Result<AudioFrame, AudioError>;
+
+    /// Play one frame to a PipeWire audio node.
+    async fn play_frame(
+        &self,
+        node_id: u32,
+        format: AudioFormat,
+        frame: AudioFrame,
+    ) -> Result<(), AudioError>;
+}
+
 /// Static graph used by tests and diagnostics.
 #[derive(Debug, Clone)]
 pub struct StaticPipeWireAudioGraph {
     snapshot: PipeWireAudioGraphSnapshot,
 }
 
+/// Static stream used by tests and diagnostics.
+#[derive(Debug, Clone, Default)]
+pub struct StaticPipeWireAudioStream {
+    capture_frames: Arc<Mutex<BTreeMap<u32, VecDeque<AudioFrame>>>>,
+    played_frames: Arc<Mutex<Vec<(u32, AudioFrame)>>>,
+}
+
+/// Placeholder stream for graph-only PipeWire backends.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnsupportedPipeWireAudioStream;
+
 /// Native PipeWire graph accessor for the current Linux user session.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativePipeWireAudioGraph;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+struct CommandSpec {
+    program: &'static str,
+    args: Vec<String>,
+}
 
 impl StaticPipeWireAudioGraph {
     /// Create a static graph from a snapshot.
     #[must_use]
     pub const fn new(snapshot: PipeWireAudioGraphSnapshot) -> Self {
         Self { snapshot }
+    }
+}
+
+impl StaticPipeWireAudioStream {
+    /// Create a static stream from queued capture frames keyed by node id.
+    #[must_use]
+    pub fn new(frames: Vec<(u32, AudioFrame)>) -> Self {
+        let mut capture_frames: BTreeMap<u32, VecDeque<AudioFrame>> = BTreeMap::new();
+        for (node_id, frame) in frames {
+            capture_frames.entry(node_id).or_default().push_back(frame);
+        }
+        Self {
+            capture_frames: Arc::new(Mutex::new(capture_frames)),
+            played_frames: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Return frames played by node id, in playback order.
+    #[must_use]
+    pub fn played_frames(&self) -> Vec<(u32, AudioFrame)> {
+        self.played_frames
+            .lock()
+            .expect("poisoned static PipeWire playback frames")
+            .clone()
     }
 }
 
@@ -153,22 +217,74 @@ impl PipeWireAudioGraph for StaticPipeWireAudioGraph {
 }
 
 #[async_trait]
+impl PipeWireAudioStream for StaticPipeWireAudioStream {
+    async fn capture_frame(
+        &self,
+        node_id: u32,
+        _format: AudioFormat,
+    ) -> Result<AudioFrame, AudioError> {
+        self.capture_frames
+            .lock()
+            .expect("poisoned static PipeWire capture frames")
+            .get_mut(&node_id)
+            .and_then(VecDeque::pop_front)
+            .ok_or_else(|| AudioError::DeviceUnavailable(format!("pipewire-node:{node_id}")))
+    }
+
+    async fn play_frame(
+        &self,
+        node_id: u32,
+        _format: AudioFormat,
+        frame: AudioFrame,
+    ) -> Result<(), AudioError> {
+        self.played_frames
+            .lock()
+            .expect("poisoned static PipeWire playback frames")
+            .push((node_id, frame));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl PipeWireAudioStream for UnsupportedPipeWireAudioStream {
+    async fn capture_frame(
+        &self,
+        _node_id: u32,
+        _format: AudioFormat,
+    ) -> Result<AudioFrame, AudioError> {
+        Err(AudioError::Unsupported(
+            "PipeWire audio stream capture is not wired",
+        ))
+    }
+
+    async fn play_frame(
+        &self,
+        _node_id: u32,
+        _format: AudioFormat,
+        _frame: AudioFrame,
+    ) -> Result<(), AudioError> {
+        Err(AudioError::Unsupported(
+            "PipeWire audio stream playback is not wired",
+        ))
+    }
+}
+
+#[async_trait]
 impl PipeWireAudioGraph for NativePipeWireAudioGraph {
     async fn snapshot(&self) -> Result<PipeWireAudioGraphSnapshot, AudioError> {
         native_pipewire_audio_snapshot().await
     }
 
-    async fn set_default_playback(&self, _node_id: u32) -> Result<(), AudioError> {
-        Err(AudioError::Unsupported(
-            "PipeWire default playback mutation is not wired yet",
-        ))
+    async fn set_default_playback(&self, node_id: u32) -> Result<(), AudioError> {
+        native_pipewire_set_default_playback(node_id).await
     }
 }
 
 /// PipeWire-backed Linux audio backend.
 #[derive(Debug, Clone)]
-pub struct PipeWireAudioBackend<G> {
+pub struct PipeWireAudioBackend<G, S = UnsupportedPipeWireAudioStream> {
     graph: G,
+    stream: S,
     preferred_format: AudioFormat,
 }
 
@@ -181,15 +297,33 @@ where
     pub fn new(graph: G) -> Self {
         Self {
             graph,
+            stream: UnsupportedPipeWireAudioStream,
+            preferred_format: AudioFormat::opus_stereo_48k(),
+        }
+    }
+}
+
+impl<G, S> PipeWireAudioBackend<G, S>
+where
+    G: PipeWireAudioGraph,
+    S: PipeWireAudioStream,
+{
+    /// Create a PipeWire audio backend with explicit graph and stream accessors.
+    #[must_use]
+    pub fn with_stream(graph: G, stream: S) -> Self {
+        Self {
+            graph,
+            stream,
             preferred_format: AudioFormat::opus_stereo_48k(),
         }
     }
 }
 
 #[async_trait]
-impl<G> AudioBackend for PipeWireAudioBackend<G>
+impl<G, S> AudioBackend for PipeWireAudioBackend<G, S>
 where
     G: PipeWireAudioGraph,
+    S: PipeWireAudioStream,
 {
     async fn devices(&self) -> Result<Vec<AudioDevice>, AudioError> {
         Ok(self
@@ -209,6 +343,31 @@ where
 
     fn preferred_format(&self) -> AudioFormat {
         self.preferred_format
+    }
+}
+
+#[async_trait]
+impl<G, S> AudioStreamBackend for PipeWireAudioBackend<G, S>
+where
+    G: PipeWireAudioGraph,
+    S: PipeWireAudioStream,
+{
+    async fn capture_audio_frame(&self, device: &AudioDeviceId) -> Result<AudioFrame, AudioError> {
+        let node_id = pipewire_node_id(device)?;
+        self.stream
+            .capture_frame(node_id, self.preferred_format)
+            .await
+    }
+
+    async fn play_audio_frame(
+        &self,
+        device: &AudioDeviceId,
+        frame: AudioFrame,
+    ) -> Result<(), AudioError> {
+        let node_id = pipewire_node_id(device)?;
+        self.stream
+            .play_frame(node_id, self.preferred_format, frame)
+            .await
     }
 }
 
@@ -247,6 +406,14 @@ fn parse_bool_property(properties: &HashMap<String, String>, key: &str) -> bool 
     )
 }
 
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn wpctl_set_default_command(node_id: u32) -> CommandSpec {
+    CommandSpec {
+        program: "wpctl",
+        args: vec!["set-default".to_string(), node_id.to_string()],
+    }
+}
+
 #[cfg(target_os = "linux")]
 async fn native_pipewire_audio_snapshot() -> Result<PipeWireAudioGraphSnapshot, AudioError> {
     tokio::task::spawn_blocking(native_pipewire::snapshot)
@@ -259,6 +426,43 @@ async fn native_pipewire_audio_snapshot() -> Result<PipeWireAudioGraphSnapshot, 
     Err(AudioError::Unsupported(
         "native PipeWire audio graph requires Linux",
     ))
+}
+
+#[cfg(target_os = "linux")]
+async fn native_pipewire_set_default_playback(node_id: u32) -> Result<(), AudioError> {
+    tokio::task::spawn_blocking(move || run_wpctl_set_default(node_id))
+        .await
+        .map_err(|error| AudioError::Backend(format!("wpctl task join: {error}")))?
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn native_pipewire_set_default_playback(_node_id: u32) -> Result<(), AudioError> {
+    Err(AudioError::Unsupported(
+        "native PipeWire default playback mutation requires Linux",
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn run_wpctl_set_default(node_id: u32) -> Result<(), AudioError> {
+    let command = wpctl_set_default_command(node_id);
+    let output = std::process::Command::new(command.program)
+        .args(&command.args)
+        .output()
+        .map_err(|error| AudioError::Backend(format!("run wpctl set-default: {error}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    Err(AudioError::Backend(format!(
+        "wpctl set-default {node_id} failed: {detail}"
+    )))
 }
 
 #[cfg(target_os = "linux")]
@@ -605,6 +809,55 @@ mod tests {
         assert_eq!(
             snapshot.nodes[0].properties.get("node.description"),
             Some(&"Built-in Speakers".to_string())
+        );
+    }
+
+    #[test]
+    fn wpctl_set_default_command_targets_pipewire_node_id() {
+        let command = wpctl_set_default_command(41);
+        assert_eq!(command.program, "wpctl");
+        assert_eq!(command.args, ["set-default", "41"]);
+    }
+
+    #[tokio::test]
+    async fn pipewire_audio_backend_routes_stream_frames_by_node_id() {
+        use bytes::Bytes;
+        use nexkvm_streaming::{AudioCodec, AudioFrame, AudioStreamBackend};
+
+        let frame = AudioFrame {
+            sequence: 2,
+            capture_time_micros: 20,
+            samples_per_channel: 480,
+            codec: AudioCodec::Pcm,
+            payload: Bytes::from_static(b"pcm"),
+        };
+        let stream = StaticPipeWireAudioStream::new(vec![(42, frame.clone())]);
+        let backend = PipeWireAudioBackend::with_stream(
+            StaticPipeWireAudioGraph::new(PipeWireAudioGraphSnapshot {
+                nodes: vec![
+                    PipeWireAudioNode::new(41).with_property("media.class", "Audio/Sink"),
+                    PipeWireAudioNode::new(42).with_property("media.class", "Audio/Source"),
+                ],
+            }),
+            stream.clone(),
+        );
+
+        let captured = backend
+            .capture_audio_frame(&AudioDeviceId::new("pipewire-node:42"))
+            .await
+            .unwrap();
+        assert_eq!(captured, frame);
+
+        backend
+            .play_audio_frame(&AudioDeviceId::new("pipewire-node:41"), captured.clone())
+            .await
+            .unwrap();
+        assert_eq!(stream.played_frames(), vec![(41, captured)]);
+        assert!(
+            backend
+                .capture_audio_frame(&AudioDeviceId::new("alsa:42"))
+                .await
+                .is_err()
         );
     }
 }

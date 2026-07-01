@@ -39,7 +39,8 @@ mod screen;
 
 pub use audio::{
     AudioBackend, AudioCodec, AudioDevice, AudioDeviceId, AudioDeviceProfile, AudioDeviceRole,
-    AudioFormat, AudioFrame, AudioRoute, AudioRouteMode, AudioRouter, SampleFormat,
+    AudioFormat, AudioFrame, AudioRoute, AudioRouteMode, AudioRouter, AudioStreamBackend,
+    SampleFormat, route_audio_frame_once,
 };
 pub use audio_sync::{AudioJitterBuffer, JitterConfig, JitterOutput, JitterStats, PushOutcome};
 pub use file_transfer_cipher::{PlaintextTransferCipher, SessionTransferCipher, TransferCipher};

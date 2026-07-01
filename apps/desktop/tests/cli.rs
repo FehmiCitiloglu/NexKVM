@@ -71,6 +71,20 @@ fn pipewire_smoke_reports_unavailable_off_linux() {
     assert!(stdout.contains("Linux PipeWire ScreenCast smoke is only available on Linux targets"));
 }
 
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn audio_smoke_reports_unavailable_off_linux() {
+    let output = nexkvm()
+        .arg("audio-smoke")
+        .output()
+        .expect("run nexkvm audio-smoke");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("nexkvm audio-smoke"));
+    assert!(stdout.contains("status: unavailable"));
+    assert!(stdout.contains("Linux PipeWire audio smoke is only available on Linux targets"));
+}
+
 #[test]
 fn pair_decodes_a_bootstrap_uri() {
     use nexkvm_crypto::{PairingBootstrap, PublicKey};
