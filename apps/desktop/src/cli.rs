@@ -21,6 +21,8 @@ pub enum Command {
     Permissions,
     /// Run a Linux Wayland portal input smoke diagnostic.
     PortalSmoke,
+    /// Run a Linux PipeWire ScreenCast smoke diagnostic.
+    PipeWireSmoke,
     /// Print protocol compatibility info.
     Protocol,
     /// Print the resolved config path.
@@ -94,6 +96,12 @@ where
             }
             Command::PortalSmoke
         }
+        Some("pipewire-smoke") => {
+            if it.next().is_some() {
+                return Err("pipewire-smoke accepts no arguments".to_string());
+            }
+            Command::PipeWireSmoke
+        }
         Some("protocol") => Command::Protocol,
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
@@ -166,6 +174,7 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm pairing-uri <addr>  Print this device's pairing bootstrap URI\n");
     out.push_str("  nexkvm permissions         Request/report required macOS permissions\n");
     out.push_str("  nexkvm portal-smoke       Test Linux Wayland portal grant/barrier/EIS flow\n");
+    out.push_str("  nexkvm pipewire-smoke     Test Linux PipeWire ScreenCast portal/frame flow\n");
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
@@ -359,6 +368,16 @@ mod tests {
             Command::PortalSmoke
         );
         assert!(help_text().contains("nexkvm portal-smoke"));
+    }
+
+    #[test]
+    fn pipewire_smoke_command_is_parsed() {
+        assert_eq!(
+            parse(["pipewire-smoke"]).unwrap().command,
+            Command::PipeWireSmoke
+        );
+        assert!(parse(["pipewire-smoke", "extra"]).is_err());
+        assert!(help_text().contains("nexkvm pipewire-smoke"));
     }
 
     #[test]

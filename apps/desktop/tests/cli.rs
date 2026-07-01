@@ -42,6 +42,7 @@ fn help_lists_the_subcommands() {
     assert!(stdout.contains("nexkvm devices"));
     assert!(stdout.contains("nexkvm pair [--accept] <uri>"));
     assert!(stdout.contains("nexkvm permissions"));
+    assert!(stdout.contains("nexkvm pipewire-smoke"));
     assert!(stdout.contains("--debug"));
 }
 
@@ -54,6 +55,20 @@ fn protocol_reports_version() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("protocol:"));
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn pipewire_smoke_reports_unavailable_off_linux() {
+    let output = nexkvm()
+        .arg("pipewire-smoke")
+        .output()
+        .expect("run nexkvm pipewire-smoke");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("nexkvm pipewire-smoke"));
+    assert!(stdout.contains("status: unavailable"));
+    assert!(stdout.contains("Linux PipeWire ScreenCast smoke is only available on Linux targets"));
 }
 
 #[test]

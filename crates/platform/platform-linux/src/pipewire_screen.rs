@@ -135,6 +135,32 @@ pub const SPA_VIDEO_FORMAT_BGRA: u32 = 10;
 /// SPA raw video NV12 id.
 pub const SPA_VIDEO_FORMAT_NV12: u32 = 23;
 
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_ID: u32 = 3;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_INT: u32 = 4;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_RECTANGLE: u32 = 10;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_OBJECT: u32 = 15;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_CHOICE: u32 = 19;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_OBJECT_FORMAT: u32 = 0x40003;
+pub const SPA_PARAM_FORMAT: u32 = 4;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_MEDIA_TYPE_VIDEO: u32 = 2;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_MEDIA_SUBTYPE_RAW: u32 = 1;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_MEDIA_TYPE: u32 = 1;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_MEDIA_SUBTYPE: u32 = 2;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_VIDEO_FORMAT: u32 = 0x20001;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_VIDEO_SIZE: u32 = 0x20003;
+
 /// Parsed subset of `spa_video_info_raw` used by NexKVM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PipeWireSpaRawVideoInfo {
@@ -727,6 +753,139 @@ fn validate_pipewire_payload(
 }
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_format_pod_bytes(bytes: &[u8]) -> Option<PipeWireSpaRawVideoInfo> {
+    let pod = SpaPodView::new(bytes)?;
+    if pod.type_ != SPA_TYPE_OBJECT || pod.body.len() < 8 {
+        return None;
+    }
+    let object_type = read_u32(pod.body, 0)?;
+    let object_id = read_u32(pod.body, 4)?;
+    if object_type != SPA_TYPE_OBJECT_FORMAT || object_id != SPA_PARAM_FORMAT {
+        return None;
+    }
+
+    let mut offset = 8usize;
+    let mut media_type = None;
+    let mut media_subtype = None;
+    let mut spa_format = None;
+    let mut size = None;
+
+    while offset.checked_add(16)? <= pod.body.len() {
+        let key = read_u32(pod.body, offset)?;
+        let value_size = usize::try_from(read_u32(pod.body, offset + 8)?).ok()?;
+        let value_type = read_u32(pod.body, offset + 12)?;
+        let value_start = offset + 16;
+        let value_end = value_start.checked_add(value_size)?;
+        if value_end > pod.body.len() {
+            return None;
+        }
+        let value = &pod.body[(offset + 8)..value_end];
+
+        match key {
+            SPA_FORMAT_MEDIA_TYPE => media_type = parse_spa_u32_value(value_type, value),
+            SPA_FORMAT_MEDIA_SUBTYPE => media_subtype = parse_spa_u32_value(value_type, value),
+            SPA_FORMAT_VIDEO_FORMAT => spa_format = parse_spa_u32_value(value_type, value),
+            SPA_FORMAT_VIDEO_SIZE => size = parse_spa_rectangle_value(value_type, value),
+            _ => {}
+        }
+
+        offset = value_start.checked_add(round_up_8(value_size))?;
+    }
+
+    if media_type != Some(SPA_MEDIA_TYPE_VIDEO) || media_subtype != Some(SPA_MEDIA_SUBTYPE_RAW) {
+        return None;
+    }
+    let (width, height) = size?;
+    Some(PipeWireSpaRawVideoInfo {
+        spa_format: spa_format?,
+        width,
+        height,
+        stride: None,
+    })
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_u32_value(type_: u32, value: &[u8]) -> Option<u32> {
+    match type_ {
+        SPA_TYPE_ID | SPA_TYPE_INT => read_u32(value, 8),
+        SPA_TYPE_CHOICE => parse_spa_choice_first_u32(value),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_rectangle_value(type_: u32, value: &[u8]) -> Option<(u32, u32)> {
+    match type_ {
+        SPA_TYPE_RECTANGLE => Some((read_u32(value, 8)?, read_u32(value, 12)?)),
+        SPA_TYPE_CHOICE => parse_spa_choice_first_rectangle(value),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_choice_first_u32(value: &[u8]) -> Option<u32> {
+    if value.len() < 24 {
+        return None;
+    }
+    let child_size = usize::try_from(read_u32(value, 16)?).ok()?;
+    let child_type = read_u32(value, 20)?;
+    if child_size < 4 || !matches!(child_type, SPA_TYPE_ID | SPA_TYPE_INT) {
+        return None;
+    }
+    read_u32(value, 24)
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_choice_first_rectangle(value: &[u8]) -> Option<(u32, u32)> {
+    if value.len() < 32 {
+        return None;
+    }
+    let child_size = usize::try_from(read_u32(value, 16)?).ok()?;
+    let child_type = read_u32(value, 20)?;
+    if child_size < 8 || child_type != SPA_TYPE_RECTANGLE {
+        return None;
+    }
+    Some((read_u32(value, 24)?, read_u32(value, 28)?))
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+struct SpaPodView<'a> {
+    type_: u32,
+    body: &'a [u8],
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+impl<'a> SpaPodView<'a> {
+    fn new(bytes: &'a [u8]) -> Option<Self> {
+        if bytes.len() < 8 {
+            return None;
+        }
+        let size = usize::try_from(read_u32(bytes, 0)?).ok()?;
+        let type_ = read_u32(bytes, 4)?;
+        let end = 8usize.checked_add(size)?;
+        if end > bytes.len() {
+            return None;
+        }
+        Some(Self {
+            type_,
+            body: &bytes[8..end],
+        })
+    }
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let chunk = bytes.get(offset..end)?;
+    Some(u32::from_le_bytes(chunk.try_into().ok()?))
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn round_up_8(value: usize) -> usize {
+    (value + 7) & !7
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 fn pipewire_frame_from_mapped_buffer(
     buffer: PipeWireMappedBuffer<'_>,
     request: PipeWireFrameRequest,
@@ -796,7 +955,8 @@ async fn native_pipewire_next_frame(
 mod native_pipewire {
     use super::{
         PipeWireFrameFormat, PipeWireFrameRequest, PipeWireMappedBuffer, PipeWireRawFrame,
-        PipeWireRemoteFd, PipeWireVideoFormat, ScreenError, pipewire_frame_from_mapped_buffer,
+        PipeWireRemoteFd, PipeWireVideoFormat, SPA_PARAM_FORMAT, ScreenError,
+        parse_spa_format_pod_bytes, pipewire_frame_from_mapped_buffer,
     };
     use std::ffi::CString;
     use std::ffi::{c_char, c_int, c_void};
@@ -849,7 +1009,8 @@ mod native_pipewire {
 
     #[repr(C)]
     struct SpaPod {
-        _private: [u8; 0],
+        size: u32,
+        type_: u32,
     }
 
     #[repr(C)]
@@ -1257,19 +1418,26 @@ mod native_pipewire {
         }
     }
 
-    extern "C" fn on_stream_param_changed(data: *mut c_void, _id: u32, param: *const SpaPod) {
-        if param.is_null() {
+    extern "C" fn on_stream_param_changed(data: *mut c_void, id: u32, param: *const SpaPod) {
+        if param.is_null() || id != SPA_PARAM_FORMAT {
             return;
         }
         let data = unsafe { &mut *data.cast::<NativeStreamData>() };
-        match PipeWireFrameFormat::fixate(
-            data.request.resolution,
-            &[
-                PipeWireVideoFormat::Bgra,
-                PipeWireVideoFormat::Rgba,
-                PipeWireVideoFormat::Nv12,
-            ],
-        ) {
+        let pod_len = unsafe { ((*param).size as usize).saturating_add(8) };
+        let pod = unsafe { std::slice::from_raw_parts(param.cast::<u8>(), pod_len) };
+        let format = parse_spa_format_pod_bytes(pod)
+            .map(PipeWireFrameFormat::from_spa_raw_info)
+            .unwrap_or_else(|| {
+                PipeWireFrameFormat::fixate(
+                    data.request.resolution,
+                    &[
+                        PipeWireVideoFormat::Bgra,
+                        PipeWireVideoFormat::Rgba,
+                        PipeWireVideoFormat::Nv12,
+                    ],
+                )
+            });
+        match format {
             Ok(format) => {
                 data.format = format;
                 data.format_negotiated = true;
@@ -1476,6 +1644,51 @@ mod tests {
                 .expect("poisoned")
                 .take()
                 .ok_or_else(|| ScreenError::Backend("no queued frame".into()))
+        }
+    }
+
+    fn spa_format_pod_fixture(spa_format: u32, width: u32, height: u32) -> Vec<u8> {
+        let mut body = Vec::new();
+        push_u32(&mut body, SPA_TYPE_OBJECT_FORMAT);
+        push_u32(&mut body, SPA_PARAM_FORMAT);
+        push_spa_id_prop(&mut body, SPA_FORMAT_MEDIA_TYPE, SPA_MEDIA_TYPE_VIDEO);
+        push_spa_id_prop(&mut body, SPA_FORMAT_MEDIA_SUBTYPE, SPA_MEDIA_SUBTYPE_RAW);
+        push_spa_id_prop(&mut body, SPA_FORMAT_VIDEO_FORMAT, spa_format);
+        push_spa_rectangle_prop(&mut body, SPA_FORMAT_VIDEO_SIZE, width, height);
+
+        let mut pod = Vec::new();
+        push_u32(&mut pod, u32::try_from(body.len()).expect("body len"));
+        push_u32(&mut pod, SPA_TYPE_OBJECT);
+        pod.extend_from_slice(&body);
+        pod
+    }
+
+    fn push_spa_id_prop(out: &mut Vec<u8>, key: u32, value: u32) {
+        push_u32(out, key);
+        push_u32(out, 0);
+        push_u32(out, 4);
+        push_u32(out, SPA_TYPE_ID);
+        push_u32(out, value);
+        pad_8(out);
+    }
+
+    fn push_spa_rectangle_prop(out: &mut Vec<u8>, key: u32, width: u32, height: u32) {
+        push_u32(out, key);
+        push_u32(out, 0);
+        push_u32(out, 8);
+        push_u32(out, SPA_TYPE_RECTANGLE);
+        push_u32(out, width);
+        push_u32(out, height);
+        pad_8(out);
+    }
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn pad_8(out: &mut Vec<u8>) {
+        while out.len() % 8 != 0 {
+            out.push(0);
         }
     }
 
@@ -1687,5 +1900,21 @@ mod tests {
         assert_eq!(format.video_format, PipeWireVideoFormat::Rgba);
         assert_eq!(format.pixel_format, PixelFormat::Rgba8);
         assert_eq!(format.stride, 5120);
+    }
+
+    #[test]
+    fn pipewire_spa_format_pod_parser_extracts_raw_video_info() {
+        let pod = spa_format_pod_fixture(SPA_VIDEO_FORMAT_BGRA, 1920, 1080);
+        let info = parse_spa_format_pod_bytes(&pod).expect("raw video info");
+
+        assert_eq!(
+            info,
+            PipeWireSpaRawVideoInfo {
+                spa_format: SPA_VIDEO_FORMAT_BGRA,
+                width: 1920,
+                height: 1080,
+                stride: None,
+            }
+        );
     }
 }

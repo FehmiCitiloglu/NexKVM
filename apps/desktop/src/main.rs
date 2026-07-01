@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Doctor => return doctor(),
         Command::Permissions => return permissions().await,
         Command::PortalSmoke => return portal_smoke().await,
+        Command::PipeWireSmoke => return pipewire_smoke().await,
         Command::Protocol => return protocol_info(),
         Command::ConfigPath => {
             println!("{}", config_path().display());
@@ -907,6 +908,118 @@ async fn portal_smoke() -> anyhow::Result<()> {
         println!("  reason: Linux Wayland portal smoke is only available on Linux targets");
     }
     Ok(())
+}
+
+async fn pipewire_smoke() -> anyhow::Result<()> {
+    println!("nexkvm pipewire-smoke");
+    #[cfg(target_os = "linux")]
+    {
+        use anyhow::Context as _;
+        use nexkvm_core::DeviceId;
+        use nexkvm_platform_linux::{
+            LinuxPipeWireScreenCapture, NativePipeWireFrameReader,
+            ZbusXdgDesktopPortalScreenCastTransport,
+        };
+        use nexkvm_streaming::{
+            GpuMemoryKind, HardwareEncoder, ScreenCaptureBackend, ScreenCodec, ScreenResolution,
+            ScreenStreamIntent, ScreenStreamPlan,
+        };
+        use tokio::time::{Duration, timeout};
+
+        println!("  transport: xdg-desktop-portal ScreenCast session bus");
+        let transport = ZbusXdgDesktopPortalScreenCastTransport::session()
+            .await
+            .context("connect xdg-desktop-portal session bus")?;
+        let backend =
+            LinuxPipeWireScreenCapture::with_frame_reader(transport, NativePipeWireFrameReader);
+
+        println!("  grant: requesting ScreenCast portal session");
+        let permissions = backend
+            .request_permissions()
+            .await
+            .context("request ScreenCast portal permissions")?;
+        println!(
+            "  grant: display_capture={} window_capture={} pending={}",
+            permissions.display_capture, permissions.window_capture, permissions.permission_pending
+        );
+
+        let sources = backend
+            .list_sources()
+            .await
+            .context("list PipeWire ScreenCast sources")?;
+        println!("  sources: {} source(s)", sources.len());
+        let source = sources
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("ScreenCast portal returned no sources"))?;
+        println!("  source: {}", source_label(&source));
+
+        let resolution = source_resolution(&source).unwrap_or(ScreenResolution::new(1920, 1080));
+        println!(
+            "  frame: requesting one {}x{} System-memory raw frame",
+            resolution.width, resolution.height
+        );
+        let plan = ScreenStreamPlan {
+            from: DeviceId::generate(),
+            to: DeviceId::generate(),
+            source,
+            intent: ScreenStreamIntent::MiniRemotePreview,
+            codec: ScreenCodec::RawRgba,
+            encoder: HardwareEncoder::Software,
+            memory: GpuMemoryKind::System,
+            resolution,
+            fps: 30,
+            bitrate_kbps: 0,
+            zero_copy: false,
+            requires_encrypted_transport: false,
+        };
+        let frame = timeout(Duration::from_secs(10), backend.capture_frame(&plan))
+            .await
+            .context("timed out waiting for first PipeWire frame")?
+            .context("capture first PipeWire frame")?;
+        println!(
+            "  frame: sequence={} resolution={}x{} pixel_format={:?} memory={:?} bytes={}",
+            frame.sequence,
+            frame.resolution.width,
+            frame.resolution.height,
+            frame.pixel_format,
+            frame.memory,
+            frame.payload.len()
+        );
+        println!("  status: ok");
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        println!("  status: unavailable");
+        println!("  reason: Linux PipeWire ScreenCast smoke is only available on Linux targets");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn source_label(source: &nexkvm_streaming::CaptureSource) -> &str {
+    match source {
+        nexkvm_streaming::CaptureSource::Display { label, .. } => label,
+        nexkvm_streaming::CaptureSource::Window { title, .. } => title,
+        nexkvm_streaming::CaptureSource::Application { name, .. } => name,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn source_resolution(
+    source: &nexkvm_streaming::CaptureSource,
+) -> Option<nexkvm_streaming::ScreenResolution> {
+    let id = match source {
+        nexkvm_streaming::CaptureSource::Display { id, .. }
+        | nexkvm_streaming::CaptureSource::Window { id, .. }
+        | nexkvm_streaming::CaptureSource::Application { id, .. } => id.0.as_str(),
+    };
+    let (_, dims) = id.rsplit_once('@')?;
+    let (width, height) = dims.split_once('x')?;
+    Some(nexkvm_streaming::ScreenResolution::new(
+        width.parse().ok()?,
+        height.parse().ok()?,
+    ))
 }
 
 fn protocol_info() -> anyhow::Result<()> {

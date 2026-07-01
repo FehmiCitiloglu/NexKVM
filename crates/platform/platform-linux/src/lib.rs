@@ -19,17 +19,23 @@ use nexkvm_core::{CoreError, OsKind};
 
 pub mod clipboard;
 pub mod inject;
+pub mod pipewire_audio;
 pub mod pipewire_screen;
 pub mod portal_input;
 
 pub use clipboard::LinuxClipboard;
+pub use pipewire_audio::{
+    PipeWireAudioBackend, PipeWireAudioGraph, PipeWireAudioGraphSnapshot, PipeWireAudioNode,
+    StaticPipeWireAudioGraph,
+};
 pub use pipewire_screen::{
     LinuxPipeWireScreenCapture, NativePipeWireFrameReader, PendingPipeWireFrameReader,
     PipeWireFrameFormat, PipeWireFrameReader, PipeWireFrameRequest, PipeWireMappedBuffer,
     PipeWireRawFrame, PipeWireRemoteFd, PipeWireScreenCastSession, PipeWireScreenCastStream,
-    PipeWireSpaRawVideoInfo, PipeWireStreamTarget, PipeWireVideoFormat, SPA_VIDEO_FORMAT_BGRA,
-    SPA_VIDEO_FORMAT_BGRX, SPA_VIDEO_FORMAT_NV12, SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_RGBX,
-    XdgDesktopPortalScreenCastTransport, ZbusXdgDesktopPortalScreenCastTransport,
+    PipeWireSpaRawVideoInfo, PipeWireStreamTarget, PipeWireVideoFormat, SPA_PARAM_FORMAT,
+    SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_BGRX, SPA_VIDEO_FORMAT_NV12, SPA_VIDEO_FORMAT_RGBA,
+    SPA_VIDEO_FORMAT_RGBX, XdgDesktopPortalScreenCastTransport,
+    ZbusXdgDesktopPortalScreenCastTransport,
 };
 pub use portal_input::{
     LinuxWaylandPortalInput, PortalEisConnection, PortalEisEventDecoder, PortalEisFd,
@@ -695,6 +701,74 @@ mod tests {
         assert!(!audio.portal_required);
         assert!(audio.can_switch_devices);
         assert!(audio.can_follow_mouse);
+    }
+
+    #[tokio::test]
+    async fn pipewire_audio_backend_maps_audio_nodes_to_devices() {
+        use crate::{
+            PipeWireAudioBackend, PipeWireAudioGraphSnapshot, PipeWireAudioNode,
+            StaticPipeWireAudioGraph,
+        };
+        use nexkvm_streaming::{AudioBackend, AudioDeviceRole, AudioFormat};
+
+        let backend =
+            PipeWireAudioBackend::new(StaticPipeWireAudioGraph::new(PipeWireAudioGraphSnapshot {
+                nodes: vec![
+                    PipeWireAudioNode::new(41)
+                        .with_property("media.class", "Audio/Sink")
+                        .with_property("node.name", "alsa_output.pci-0000_00_1f.3")
+                        .with_property("node.description", "Built-in Speakers")
+                        .with_default(true),
+                    PipeWireAudioNode::new(42)
+                        .with_property("media.class", "Audio/Source")
+                        .with_property("node.name", "alsa_input.pci-0000_00_1f.3")
+                        .with_property("node.description", "Built-in Microphone"),
+                    PipeWireAudioNode::new(77)
+                        .with_property("media.class", "Stream/Output/Audio")
+                        .with_property("node.name", "browser"),
+                ],
+            }));
+
+        let devices = backend.devices().await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].id.0, "pipewire-node:41");
+        assert_eq!(devices[0].label, "Built-in Speakers");
+        assert_eq!(devices[0].role, AudioDeviceRole::Playback);
+        assert!(devices[0].is_default);
+        assert_eq!(devices[1].id.0, "pipewire-node:42");
+        assert_eq!(devices[1].role, AudioDeviceRole::Capture);
+        assert_eq!(backend.preferred_format(), AudioFormat::opus_stereo_48k());
+    }
+
+    #[tokio::test]
+    async fn pipewire_audio_backend_switches_playback_by_pipewire_node_id() {
+        use crate::{
+            PipeWireAudioBackend, PipeWireAudioGraphSnapshot, PipeWireAudioNode,
+            StaticPipeWireAudioGraph,
+        };
+        use nexkvm_streaming::{AudioBackend, AudioDeviceId};
+
+        let backend =
+            PipeWireAudioBackend::new(StaticPipeWireAudioGraph::new(PipeWireAudioGraphSnapshot {
+                nodes: vec![PipeWireAudioNode::new(41).with_property("media.class", "Audio/Sink")],
+            }));
+
+        backend
+            .switch_playback_device(&AudioDeviceId::new("pipewire-node:41"))
+            .await
+            .unwrap();
+        assert!(
+            backend
+                .switch_playback_device(&AudioDeviceId::new("pipewire-node:not-a-node"))
+                .await
+                .is_err()
+        );
+        assert!(
+            backend
+                .switch_playback_device(&AudioDeviceId::new("alsa:41"))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

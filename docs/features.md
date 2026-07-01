@@ -311,9 +311,18 @@ planned.
   BGRA/RGBA/NV12, stride and expected system payload sizing are tracked, and
   native `param_changed` is hooked into deterministic NexKVM format fixation;
   parsed `spa_video_info_raw` format/size/stride mapping is modeled for
-  RGBA/RGBx/BGRA/BGRx/NV12; extracting that raw info from the incoming SPA pod
-  and real Wayland smoke coverage are pending).
-- [ ] Linux PipeWire audio routing backend.
+  RGBA/RGBx/BGRA/BGRx/NV12; incoming `SPA_PARAM_Format` object pods are walked
+  in Rust to extract media type/subtype, raw video format, and frame size into
+  `PipeWireSpaRawVideoInfo`; `nexkvm pipewire-smoke` exercises ScreenCast portal
+  grant, source listing, remote fd/native reader setup, format negotiation, and
+  first-frame capture on real Linux Wayland sessions).
+- [~] Linux PipeWire audio routing backend (PipeWire audio graph node metadata is
+  mapped into the shared `AudioBackend` model; `Audio/Sink`, `Audio/Source`, and
+  `Audio/Duplex` nodes become playback/capture/duplex `AudioDevice`s with
+  default endpoint reporting; playback switch requests validate
+  `pipewire-node:<id>` targets behind a graph boundary; live PipeWire registry
+  enumeration, WirePlumber/default-node mutation, and stream capture/playback
+  routing are pending).
 - [ ] Linux X11 input and clipboard fallback implementation.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.
