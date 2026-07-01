@@ -19,9 +19,16 @@ use nexkvm_core::{CoreError, OsKind};
 
 pub mod clipboard;
 pub mod inject;
+pub mod pipewire_screen;
 pub mod portal_input;
 
 pub use clipboard::LinuxClipboard;
+pub use pipewire_screen::{
+    LinuxPipeWireScreenCapture, NativePipeWireFrameReader, PendingPipeWireFrameReader,
+    PipeWireFrameReader, PipeWireFrameRequest, PipeWireRawFrame, PipeWireRemoteFd,
+    PipeWireScreenCastSession, PipeWireScreenCastStream, PipeWireStreamTarget,
+    XdgDesktopPortalScreenCastTransport, ZbusXdgDesktopPortalScreenCastTransport,
+};
 pub use portal_input::{
     LinuxWaylandPortalInput, PortalEisConnection, PortalEisEventDecoder, PortalEisFd,
     PortalInputGrant, PortalInputZone, PortalNotifyMethod, PortalPointerBarrier, PortalZoneSet,

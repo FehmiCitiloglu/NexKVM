@@ -2358,6 +2358,7 @@ dependencies = [
  "nexkvm-clipboard",
  "nexkvm-core",
  "nexkvm-input",
+ "nexkvm-streaming",
  "reis",
  "tokio",
  "tracing",

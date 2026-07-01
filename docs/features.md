@@ -296,7 +296,15 @@ planned.
   context and maps pointer, scroll, button, and keyboard EIS events to NexKVM
   input events; `nexkvm portal-smoke` exercises the grant, first-zone right-edge
   barrier, and EIS event path on real Linux Wayland sessions).
-- [ ] Linux PipeWire screen capture.
+- [~] Linux PipeWire screen capture (xdg-desktop-portal `ScreenCast` transport
+  is wired through `CreateSession`, `SelectSources`, `Start`, and
+  `OpenPipeWireRemote`; portal stream metadata and the PipeWire remote fd are
+  retained; `LinuxPipeWireScreenCapture` implements `ScreenCaptureBackend`
+  capability reporting, permission grant flow, and display/window source
+  listing; `pipewire-serial`/portal/node stream targeting and raw PipeWire frame
+  validation into `ScreenFrame` are implemented behind a `PipeWireFrameReader`
+  boundary; Linux-only native `pw_context_connect_fd` scaffold is present;
+  PipeWire stream process/dequeue buffer pump is pending).
 - [ ] Linux PipeWire audio routing backend.
 - [ ] Linux X11 input and clipboard fallback implementation.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.

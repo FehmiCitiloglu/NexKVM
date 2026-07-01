@@ -15,6 +15,7 @@ workspace = true
 nexkvm-core.workspace = true
 nexkvm-input.workspace = true
 nexkvm-clipboard.workspace = true
+nexkvm-streaming.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
 bytes.workspace = true
