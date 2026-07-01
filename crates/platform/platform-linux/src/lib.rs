@@ -19,8 +19,10 @@ use nexkvm_core::{CoreError, OsKind};
 
 pub mod clipboard;
 pub mod inject;
+pub mod portal_input;
 
 pub use clipboard::LinuxClipboard;
+pub use portal_input::{LinuxWaylandPortalInput, PortalInputGrant, WaylandPortalInputClient};
 
 /// Display/session family detected for Linux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,12 +419,13 @@ impl PlatformBackend for LinuxBackend {
     async fn request_permissions(&self) -> Result<PlatformCapabilities, CoreError> {
         let details = self.capability_details();
         match details.session {
-            LinuxSessionKind::Wayland if details.portals.desktop => {
-                // Later phases perform the actual D-Bus portal request. For now
-                // the resolver reports that a grant is pending rather than
-                // claiming capture/injection is usable without compositor consent.
-                Ok(details.platform)
+            LinuxSessionKind::Wayland if details.portals.has_full_wayland_input() => {
+                Ok(PlatformCapabilities {
+                    permission_pending: false,
+                    ..details.platform
+                })
             }
+            LinuxSessionKind::Wayland if details.portals.desktop => Ok(details.platform),
             LinuxSessionKind::Wayland => Err(CoreError::Unsupported(
                 "Wayland session requires xdg-desktop-portal RemoteDesktop/InputCapture support",
             )),
@@ -613,6 +616,20 @@ mod tests {
         assert!(details.platform.permission_pending);
     }
 
+    #[tokio::test]
+    async fn permission_request_marks_granted_wayland_portals_ready() {
+        let mut env = env("wayland", "KDE");
+        env.portal_input_capture = Some(true);
+        let capabilities = LinuxBackend::with_environment(env)
+            .request_permissions()
+            .await
+            .expect("permission request");
+
+        assert!(capabilities.can_inject_input);
+        assert!(capabilities.can_capture_input);
+        assert!(!capabilities.permission_pending);
+    }
+
     #[test]
     fn x11_session_is_full_legacy_fallback() {
         let mut env = env("x11", "KDE");
@@ -706,5 +723,108 @@ mod tests {
         assert!(handheld.touchscreen_likely);
         assert!(handheld.virtual_keyboard_likely);
         assert!(handheld.steam_game_mode);
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingPortalClient {
+        requests: std::sync::Mutex<Vec<PortalInputGrant>>,
+        injected: std::sync::Mutex<Vec<nexkvm_input::InjectionCommand>>,
+        events: std::sync::Mutex<Vec<nexkvm_input::InputEvent>>,
+        grant: PortalInputGrant,
+    }
+
+    #[async_trait]
+    impl WaylandPortalInputClient for RecordingPortalClient {
+        async fn request_input_session(
+            &self,
+            required: PortalInputGrant,
+        ) -> Result<PortalInputGrant, nexkvm_input::InputError> {
+            self.requests.lock().expect("poisoned").push(required);
+            Ok(self.grant)
+        }
+
+        async fn inject(
+            &self,
+            command: nexkvm_input::InjectionCommand,
+        ) -> Result<(), nexkvm_input::InputError> {
+            self.injected.lock().expect("poisoned").push(command);
+            Ok(())
+        }
+
+        async fn next_event(&self) -> Result<nexkvm_input::InputEvent, nexkvm_input::InputError> {
+            self.events
+                .lock()
+                .expect("poisoned")
+                .pop()
+                .ok_or_else(|| nexkvm_input::InputError::Backend("empty portal queue".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn wayland_portal_input_session_injects_and_captures() {
+        use nexkvm_input::{InputCapture, InputEvent, InputInjector, MouseButton};
+
+        let client = RecordingPortalClient {
+            grant: PortalInputGrant {
+                remote_desktop: true,
+                input_capture: true,
+            },
+            events: std::sync::Mutex::new(vec![InputEvent::ButtonPress(MouseButton::Left)]),
+            ..RecordingPortalClient::default()
+        };
+        let input = LinuxWaylandPortalInput::connect(
+            PortalAvailability {
+                desktop: true,
+                remote_desktop: true,
+                input_capture: true,
+                screen_cast: false,
+                pipewire: false,
+                clipboard: false,
+            },
+            client,
+        )
+        .await
+        .expect("portal session");
+
+        input
+            .inject(InputEvent::PointerMove { x: 0.4, y: 0.6 })
+            .await
+            .expect("inject");
+        assert_eq!(
+            input.client().injected.lock().expect("poisoned").as_slice(),
+            &[nexkvm_input::InjectionCommand::MoveAbsolute { x: 0.4, y: 0.6 }]
+        );
+        assert_eq!(
+            input.next_event().await.expect("capture"),
+            InputEvent::ButtonPress(MouseButton::Left)
+        );
+        assert_eq!(
+            input.client().requests.lock().expect("poisoned").as_slice(),
+            &[PortalInputGrant {
+                remote_desktop: true,
+                input_capture: true,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn wayland_portal_input_requires_input_capture_portal() {
+        let result = LinuxWaylandPortalInput::connect(
+            PortalAvailability {
+                desktop: true,
+                remote_desktop: true,
+                input_capture: false,
+                screen_cast: false,
+                pipewire: false,
+                clipboard: false,
+            },
+            RecordingPortalClient::default(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(nexkvm_input::InputError::PermissionDenied)
+        ));
     }
 }

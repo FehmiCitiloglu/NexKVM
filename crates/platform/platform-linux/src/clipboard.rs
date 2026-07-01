@@ -44,10 +44,10 @@ impl Clipboard for LinuxClipboard {
             let mut contents = Vec::new();
 
             // Try to read text first
-            if let Ok(text) = clipboard.get_text() {
-                if !text.is_empty() {
-                    contents.push(ClipboardContent::text(text));
-                }
+            if let Ok(text) = clipboard.get_text()
+                && !text.is_empty()
+            {
+                contents.push(ClipboardContent::text(text));
             }
 
             // Try to read image data (PNG)
