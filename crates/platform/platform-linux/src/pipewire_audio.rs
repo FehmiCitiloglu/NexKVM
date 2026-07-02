@@ -5,9 +5,10 @@
 //! native graph mutation is wired in later slices.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use nexkvm_streaming::{
-    AudioBackend, AudioDevice, AudioDeviceId, AudioDeviceRole, AudioError, AudioFormat, AudioFrame,
-    AudioStreamBackend,
+    AudioBackend, AudioCodec, AudioDevice, AudioDeviceId, AudioDeviceRole, AudioError, AudioFormat,
+    AudioFrame, AudioStreamBackend,
 };
 use std::collections::VecDeque;
 use std::collections::{BTreeMap, HashMap};
@@ -139,6 +140,27 @@ pub trait PipeWireAudioStream: Send + Sync {
     ) -> Result<(), AudioError>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PipeWireAudioStreamDirection {
+    Capture,
+    Playback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PipeWireAudioStreamRequest {
+    node_id: u32,
+    direction: PipeWireAudioStreamDirection,
+    format: AudioFormat,
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+struct PipeWireAudioMappedBuffer<'a> {
+    bytes: &'a [u8],
+    chunk_offset: usize,
+    chunk_size: usize,
+    capture_time_micros: u64,
+}
+
 /// Static graph used by tests and diagnostics.
 #[derive(Debug, Clone)]
 pub struct StaticPipeWireAudioGraph {
@@ -155,6 +177,10 @@ pub struct StaticPipeWireAudioStream {
 /// Placeholder stream for graph-only PipeWire backends.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UnsupportedPipeWireAudioStream;
+
+/// Native PipeWire stream accessor for the current Linux user session.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativePipeWireAudioStream;
 
 /// Native PipeWire graph accessor for the current Linux user session.
 #[derive(Debug, Clone, Copy, Default)]
@@ -266,6 +292,36 @@ impl PipeWireAudioStream for UnsupportedPipeWireAudioStream {
         Err(AudioError::Unsupported(
             "PipeWire audio stream playback is not wired",
         ))
+    }
+}
+
+#[async_trait]
+impl PipeWireAudioStream for NativePipeWireAudioStream {
+    async fn capture_frame(
+        &self,
+        node_id: u32,
+        format: AudioFormat,
+    ) -> Result<AudioFrame, AudioError> {
+        let request = PipeWireAudioStreamRequest {
+            node_id,
+            direction: PipeWireAudioStreamDirection::Capture,
+            format,
+        };
+        native_pipewire_capture_audio_frame(request).await
+    }
+
+    async fn play_frame(
+        &self,
+        node_id: u32,
+        format: AudioFormat,
+        frame: AudioFrame,
+    ) -> Result<(), AudioError> {
+        let request = PipeWireAudioStreamRequest {
+            node_id,
+            direction: PipeWireAudioStreamDirection::Playback,
+            format,
+        };
+        native_pipewire_play_audio_frame(request, frame).await
     }
 }
 
@@ -407,6 +463,52 @@ fn parse_bool_property(properties: &HashMap<String, String>, key: &str) -> bool 
 }
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn audio_stream_properties(request: &PipeWireAudioStreamRequest) -> Vec<(String, String)> {
+    vec![
+        ("application.name".into(), "NexKVM".into()),
+        ("media.type".into(), "Audio".into()),
+        (
+            "media.category".into(),
+            match request.direction {
+                PipeWireAudioStreamDirection::Capture => "Capture",
+                PipeWireAudioStreamDirection::Playback => "Playback",
+            }
+            .into(),
+        ),
+        ("media.role".into(), "Music".into()),
+        ("target.object".into(), request.node_id.to_string()),
+    ]
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn audio_frame_from_mapped_buffer(
+    buffer: PipeWireAudioMappedBuffer<'_>,
+    format: AudioFormat,
+    sequence: u64,
+) -> Result<AudioFrame, AudioError> {
+    if format.codec != AudioCodec::Pcm {
+        return Err(AudioError::Unsupported(
+            "native PipeWire audio stream currently expects PCM frames",
+        ));
+    }
+    let end = buffer
+        .chunk_offset
+        .checked_add(buffer.chunk_size)
+        .ok_or_else(|| AudioError::Codec("PipeWire audio chunk range overflow".into()))?;
+    let bytes = buffer
+        .bytes
+        .get(buffer.chunk_offset..end)
+        .ok_or_else(|| AudioError::Codec("PipeWire audio chunk range out of bounds".into()))?;
+    Ok(AudioFrame {
+        sequence,
+        capture_time_micros: buffer.capture_time_micros,
+        samples_per_channel: format.samples_per_frame(),
+        codec: AudioCodec::Pcm,
+        payload: Bytes::copy_from_slice(bytes),
+    })
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 fn wpctl_set_default_command(node_id: u32) -> CommandSpec {
     CommandSpec {
         program: "wpctl",
@@ -443,6 +545,48 @@ async fn native_pipewire_set_default_playback(_node_id: u32) -> Result<(), Audio
 }
 
 #[cfg(target_os = "linux")]
+async fn native_pipewire_capture_audio_frame(
+    request: PipeWireAudioStreamRequest,
+) -> Result<AudioFrame, AudioError> {
+    tokio::task::spawn_blocking(move || native_pipewire::capture_audio_frame(request))
+        .await
+        .map_err(|error| {
+            AudioError::Backend(format!("PipeWire audio capture task join: {error}"))
+        })?
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn native_pipewire_capture_audio_frame(
+    _request: PipeWireAudioStreamRequest,
+) -> Result<AudioFrame, AudioError> {
+    Err(AudioError::Unsupported(
+        "native PipeWire audio capture requires Linux",
+    ))
+}
+
+#[cfg(target_os = "linux")]
+async fn native_pipewire_play_audio_frame(
+    request: PipeWireAudioStreamRequest,
+    frame: AudioFrame,
+) -> Result<(), AudioError> {
+    tokio::task::spawn_blocking(move || native_pipewire::play_audio_frame(request, frame))
+        .await
+        .map_err(|error| {
+            AudioError::Backend(format!("PipeWire audio playback task join: {error}"))
+        })?
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn native_pipewire_play_audio_frame(
+    _request: PipeWireAudioStreamRequest,
+    _frame: AudioFrame,
+) -> Result<(), AudioError> {
+    Err(AudioError::Unsupported(
+        "native PipeWire audio playback requires Linux",
+    ))
+}
+
+#[cfg(target_os = "linux")]
 fn run_wpctl_set_default(node_id: u32) -> Result<(), AudioError> {
     let command = wpctl_set_default_command(node_id);
     let output = std::process::Command::new(command.program)
@@ -469,16 +613,25 @@ fn run_wpctl_set_default(node_id: u32) -> Result<(), AudioError> {
 #[allow(clashing_extern_declarations)]
 mod native_pipewire {
     use super::{
-        AudioError, PipeWireAudioGraphSnapshot, PipeWireRegistryCollector, PipeWireRegistryGlobal,
+        AudioError, AudioFrame, PipeWireAudioGraphSnapshot, PipeWireAudioMappedBuffer,
+        PipeWireAudioStreamDirection, PipeWireAudioStreamRequest, PipeWireRegistryCollector,
+        PipeWireRegistryGlobal, audio_frame_from_mapped_buffer, audio_stream_properties,
     };
     use std::collections::HashMap;
-    use std::ffi::{CStr, c_char, c_int, c_void};
+    use std::ffi::{CStr, CString, c_char, c_int, c_void};
     use std::ptr;
+    use std::sync::mpsc::{SyncSender, TryRecvError, sync_channel};
     use std::time::{Duration, Instant};
 
     const REGISTRY_ENUMERATION_TIMEOUT: Duration = Duration::from_millis(500);
     const REGISTRY_ITERATE_TIMEOUT_MS: c_int = 25;
     const PW_VERSION_REGISTRY: u32 = 3;
+    const PW_DIRECTION_INPUT: u32 = 0;
+    const PW_DIRECTION_OUTPUT: u32 = 1;
+    const PW_ID_ANY: u32 = u32::MAX;
+    const PW_STREAM_FLAG_AUTOCONNECT: u32 = 1 << 0;
+    const PW_STREAM_FLAG_MAP_BUFFERS: u32 = 1 << 2;
+    const STREAM_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
     #[repr(C)]
     struct SpaDict {
@@ -561,6 +714,74 @@ mod native_pipewire {
     }
 
     #[repr(C)]
+    struct PwProperties {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct PwStream {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
+    struct SpaPod {
+        size: u32,
+        type_: u32,
+    }
+
+    #[repr(C)]
+    struct PwStreamEvents {
+        version: u32,
+        destroy: Option<extern "C" fn(*mut c_void)>,
+        state_changed: Option<extern "C" fn(*mut c_void, u32, u32, *const c_char)>,
+        control_info: Option<extern "C" fn(*mut c_void, u32, *const c_void)>,
+        io_changed: Option<extern "C" fn(*mut c_void, u32, *mut c_void, u32)>,
+        param_changed: Option<extern "C" fn(*mut c_void, u32, *const SpaPod)>,
+        add_buffer: Option<extern "C" fn(*mut c_void, *mut PwBuffer)>,
+        remove_buffer: Option<extern "C" fn(*mut c_void, *mut PwBuffer)>,
+        process: Option<extern "C" fn(*mut c_void)>,
+        drained: Option<extern "C" fn(*mut c_void)>,
+        command: Option<extern "C" fn(*mut c_void, *const c_void)>,
+        trigger_done: Option<extern "C" fn(*mut c_void)>,
+    }
+
+    #[repr(C)]
+    struct PwBuffer {
+        buffer: *mut SpaBuffer,
+        user_data: *mut c_void,
+        size: u64,
+        requested: u64,
+        time: u64,
+    }
+
+    #[repr(C)]
+    struct SpaBuffer {
+        n_metas: u32,
+        metas: *mut c_void,
+        n_datas: u32,
+        datas: *mut SpaData,
+    }
+
+    #[repr(C)]
+    struct SpaData {
+        type_: u32,
+        flags: u32,
+        fd: i64,
+        mapoffset: u32,
+        maxsize: u32,
+        data: *mut c_void,
+        chunk: *mut SpaChunk,
+    }
+
+    #[repr(C)]
+    struct SpaChunk {
+        offset: u32,
+        size: u32,
+        stride: i32,
+        flags: i32,
+    }
+
+    #[repr(C)]
     struct PwRegistryEvents {
         version: u32,
         global: Option<
@@ -578,6 +799,16 @@ mod native_pipewire {
 
     struct RegistryData {
         collector: PipeWireRegistryCollector,
+    }
+
+    struct AudioStreamData {
+        stream: *mut PwStream,
+        request: PipeWireAudioStreamRequest,
+        sequence: u64,
+        capture_sender: Option<SyncSender<Result<AudioFrame, String>>>,
+        playback_sender: Option<SyncSender<Result<(), String>>>,
+        playback_frame: Option<AudioFrame>,
+        playback_done: bool,
     }
 
     unsafe extern "C" {
@@ -613,12 +844,97 @@ mod native_pipewire {
             data: *mut c_void,
         ) -> c_int;
         fn pw_loop_iterate(loop_: *mut PwLoop, timeout: c_int) -> c_int;
+        fn pw_properties_new_string(args: *const c_char) -> *mut PwProperties;
+        fn pw_properties_set(
+            properties: *mut PwProperties,
+            key: *const c_char,
+            value: *const c_char,
+        ) -> c_int;
+        fn pw_properties_free(properties: *mut PwProperties);
+        fn pw_stream_new(
+            core: *mut PwCore,
+            name: *const c_char,
+            props: *mut PwProperties,
+        ) -> *mut PwStream;
+        fn pw_stream_destroy(stream: *mut PwStream);
+        fn pw_stream_add_listener(
+            stream: *mut PwStream,
+            listener: *mut SpaHook,
+            events: *const PwStreamEvents,
+            data: *mut c_void,
+        );
+        fn pw_stream_connect(
+            stream: *mut PwStream,
+            direction: u32,
+            target_id: u32,
+            flags: u32,
+            params: *mut *const SpaPod,
+            n_params: u32,
+        ) -> c_int;
+        fn pw_stream_dequeue_buffer(stream: *mut PwStream) -> *mut PwBuffer;
+        fn pw_stream_queue_buffer(stream: *mut PwStream, buffer: *mut PwBuffer) -> c_int;
         fn pw_proxy_destroy(proxy: *mut PwProxy);
     }
 
     pub(super) fn snapshot() -> Result<PipeWireAudioGraphSnapshot, AudioError> {
         let mut connection = PipeWireConnection::connect()?;
         connection.enumerate()
+    }
+
+    pub(super) fn capture_audio_frame(
+        request: PipeWireAudioStreamRequest,
+    ) -> Result<AudioFrame, AudioError> {
+        let connection = PipeWireConnection::connect()?;
+        let (sender, receiver) = sync_channel(1);
+        let stream = PipeWireAudioNativeStream::connect_capture(&connection, request, sender)?;
+        let started = Instant::now();
+        loop {
+            match receiver.try_recv() {
+                Ok(Ok(frame)) => return Ok(frame),
+                Ok(Err(error)) => return Err(AudioError::Backend(error)),
+                Err(TryRecvError::Disconnected) => {
+                    return Err(AudioError::Backend(
+                        "PipeWire audio capture stream disconnected".into(),
+                    ));
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            if started.elapsed() >= STREAM_WAIT_TIMEOUT {
+                return Err(AudioError::Backend(
+                    "timed out waiting for PipeWire audio frame".into(),
+                ));
+            }
+            stream.iterate(100)?;
+        }
+    }
+
+    pub(super) fn play_audio_frame(
+        request: PipeWireAudioStreamRequest,
+        frame: AudioFrame,
+    ) -> Result<(), AudioError> {
+        let connection = PipeWireConnection::connect()?;
+        let (sender, receiver) = sync_channel(1);
+        let stream =
+            PipeWireAudioNativeStream::connect_playback(&connection, request, frame, sender)?;
+        let started = Instant::now();
+        loop {
+            match receiver.try_recv() {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(error)) => return Err(AudioError::Backend(error)),
+                Err(TryRecvError::Disconnected) => {
+                    return Err(AudioError::Backend(
+                        "PipeWire audio playback stream disconnected".into(),
+                    ));
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            if started.elapsed() >= STREAM_WAIT_TIMEOUT {
+                return Err(AudioError::Backend(
+                    "timed out waiting for PipeWire audio playback buffer".into(),
+                ));
+            }
+            stream.iterate(100)?;
+        }
     }
 
     struct PipeWireConnection {
@@ -713,6 +1029,338 @@ mod native_pipewire {
                 pw_main_loop_destroy(self.main_loop);
             }
         }
+    }
+
+    struct PipeWireAudioNativeStream {
+        stream: *mut PwStream,
+        listener: SpaHook,
+        events: PwStreamEvents,
+        data: Box<AudioStreamData>,
+        loop_: *mut PwLoop,
+    }
+
+    impl PipeWireAudioNativeStream {
+        fn connect_capture(
+            connection: &PipeWireConnection,
+            request: PipeWireAudioStreamRequest,
+            sender: SyncSender<Result<AudioFrame, String>>,
+        ) -> Result<Self, AudioError> {
+            let data = AudioStreamData {
+                stream: ptr::null_mut(),
+                request,
+                sequence: 1,
+                capture_sender: Some(sender),
+                playback_sender: None,
+                playback_frame: None,
+                playback_done: false,
+            };
+            Self::connect(connection, data)
+        }
+
+        fn connect_playback(
+            connection: &PipeWireConnection,
+            request: PipeWireAudioStreamRequest,
+            frame: AudioFrame,
+            sender: SyncSender<Result<(), String>>,
+        ) -> Result<Self, AudioError> {
+            let data = AudioStreamData {
+                stream: ptr::null_mut(),
+                request,
+                sequence: frame.sequence,
+                capture_sender: None,
+                playback_sender: Some(sender),
+                playback_frame: Some(frame),
+                playback_done: false,
+            };
+            Self::connect(connection, data)
+        }
+
+        fn connect(
+            connection: &PipeWireConnection,
+            mut data: AudioStreamData,
+        ) -> Result<Self, AudioError> {
+            let props = stream_properties(&data.request)?;
+            let name = CString::new("nexkvm-audio").map_err(|error| {
+                AudioError::Backend(format!("PipeWire audio stream name: {error}"))
+            })?;
+            let stream = unsafe { pw_stream_new(connection.core, name.as_ptr(), props) };
+            if stream.is_null() {
+                unsafe {
+                    pw_properties_free(props);
+                }
+                return Err(AudioError::Backend("create PipeWire audio stream".into()));
+            }
+
+            data.stream = stream;
+            let mut data = Box::new(data);
+            let mut listener = SpaHook::default();
+            let events = PwStreamEvents {
+                version: 0,
+                destroy: None,
+                state_changed: None,
+                control_info: None,
+                io_changed: None,
+                param_changed: None,
+                add_buffer: None,
+                remove_buffer: None,
+                process: Some(on_audio_stream_process),
+                drained: None,
+                command: None,
+                trigger_done: None,
+            };
+            unsafe {
+                pw_stream_add_listener(
+                    stream,
+                    &mut listener,
+                    &events,
+                    (&mut *data as *mut AudioStreamData).cast(),
+                );
+            }
+            let direction = match data.request.direction {
+                PipeWireAudioStreamDirection::Capture => PW_DIRECTION_INPUT,
+                PipeWireAudioStreamDirection::Playback => PW_DIRECTION_OUTPUT,
+            };
+            let flags = PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS;
+            let res = unsafe {
+                pw_stream_connect(stream, direction, PW_ID_ANY, flags, ptr::null_mut(), 0)
+            };
+            if res < 0 {
+                unsafe {
+                    pw_stream_destroy(stream);
+                }
+                return Err(AudioError::Backend(format!(
+                    "connect PipeWire audio stream: {res}"
+                )));
+            }
+
+            Ok(Self {
+                stream,
+                listener,
+                events,
+                data,
+                loop_: connection.loop_,
+            })
+        }
+
+        fn iterate(&self, timeout_ms: i32) -> Result<(), AudioError> {
+            let res = unsafe { pw_loop_iterate(self.loop_, timeout_ms) };
+            if res < 0 {
+                return Err(AudioError::Backend(format!(
+                    "iterate PipeWire audio stream: {res}"
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for PipeWireAudioNativeStream {
+        fn drop(&mut self) {
+            let _ = &self.listener;
+            let _ = &self.events;
+            let _ = &self.data;
+            unsafe {
+                pw_stream_destroy(self.stream);
+            }
+        }
+    }
+
+    fn stream_properties(
+        request: &PipeWireAudioStreamRequest,
+    ) -> Result<*mut PwProperties, AudioError> {
+        let empty = CString::new("{}")
+            .map_err(|error| AudioError::Backend(format!("PipeWire audio props json: {error}")))?;
+        let props = unsafe { pw_properties_new_string(empty.as_ptr()) };
+        if props.is_null() {
+            return Err(AudioError::Backend(
+                "create PipeWire audio stream properties".into(),
+            ));
+        }
+        for (key, value) in audio_stream_properties(request) {
+            set_property(props, &key, &value)?;
+        }
+        Ok(props)
+    }
+
+    fn set_property(props: *mut PwProperties, key: &str, value: &str) -> Result<(), AudioError> {
+        let key = CString::new(key).map_err(|error| {
+            AudioError::Backend(format!("PipeWire audio property key: {error}"))
+        })?;
+        let value = CString::new(value).map_err(|error| {
+            AudioError::Backend(format!("PipeWire audio property value: {error}"))
+        })?;
+        let res = unsafe { pw_properties_set(props, key.as_ptr(), value.as_ptr()) };
+        if res < 0 {
+            return Err(AudioError::Backend(format!(
+                "set PipeWire audio property {}: {res}",
+                key.to_string_lossy()
+            )));
+        }
+        Ok(())
+    }
+
+    extern "C" fn on_audio_stream_process(data: *mut c_void) {
+        if data.is_null() {
+            return;
+        }
+        let data = unsafe { &mut *data.cast::<AudioStreamData>() };
+        match data.request.direction {
+            PipeWireAudioStreamDirection::Capture => {
+                match unsafe { capture_audio_stream_frame(data) } {
+                    Ok(Some(frame)) => {
+                        if let Some(sender) = &data.capture_sender {
+                            let _ = sender.try_send(Ok(frame));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        if let Some(sender) = &data.capture_sender {
+                            let _ = sender.try_send(Err(error));
+                        }
+                    }
+                }
+            }
+            PipeWireAudioStreamDirection::Playback => {
+                if data.playback_done {
+                    return;
+                }
+                match unsafe { write_audio_stream_frame(data) } {
+                    Ok(true) => {
+                        data.playback_done = true;
+                        if let Some(sender) = &data.playback_sender {
+                            let _ = sender.try_send(Ok(()));
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        if let Some(sender) = &data.playback_sender {
+                            let _ = sender.try_send(Err(error));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe fn capture_audio_stream_frame(
+        data: &mut AudioStreamData,
+    ) -> Result<Option<AudioFrame>, String> {
+        let buffer = unsafe { pw_stream_dequeue_buffer(data.stream) };
+        if buffer.is_null() {
+            return Ok(None);
+        }
+        let frame = extract_audio_frame_from_pw_buffer(data, buffer);
+        unsafe {
+            let _ = pw_stream_queue_buffer(data.stream, buffer);
+        }
+        frame.map(Some)
+    }
+
+    fn extract_audio_frame_from_pw_buffer(
+        data: &mut AudioStreamData,
+        buffer: *mut PwBuffer,
+    ) -> Result<AudioFrame, String> {
+        let mapped = mapped_audio_buffer(buffer)?;
+        let frame = audio_frame_from_mapped_buffer(mapped, data.request.format, data.sequence)
+            .map_err(|error| error.to_string())?;
+        data.sequence = data.sequence.saturating_add(1);
+        Ok(frame)
+    }
+
+    unsafe fn write_audio_stream_frame(data: &mut AudioStreamData) -> Result<bool, String> {
+        let Some(frame) = data.playback_frame.take() else {
+            return Ok(false);
+        };
+        let buffer = unsafe { pw_stream_dequeue_buffer(data.stream) };
+        if buffer.is_null() {
+            data.playback_frame = Some(frame);
+            return Ok(false);
+        }
+        let result = write_audio_frame_to_pw_buffer(buffer, &frame);
+        unsafe {
+            let _ = pw_stream_queue_buffer(data.stream, buffer);
+        }
+        result.map(|()| true)
+    }
+
+    fn mapped_audio_buffer(
+        buffer: *mut PwBuffer,
+    ) -> Result<PipeWireAudioMappedBuffer<'static>, String> {
+        let spa = unsafe { (*buffer).buffer };
+        if spa.is_null() {
+            return Err("PipeWire audio buffer did not include a SPA buffer".into());
+        }
+        let spa = unsafe { &*spa };
+        if spa.n_datas == 0 || spa.datas.is_null() {
+            return Err("PipeWire audio SPA buffer had no data planes".into());
+        }
+        let plane = unsafe { &*spa.datas };
+        let chunk = if plane.chunk.is_null() {
+            return Err("PipeWire audio SPA data plane had no chunk".into());
+        } else {
+            unsafe { &*plane.chunk }
+        };
+        let maxsize = usize::try_from(plane.maxsize)
+            .map_err(|_| "PipeWire audio data plane maxsize overflow".to_string())?;
+        let chunk_offset = if maxsize == 0 {
+            0
+        } else {
+            usize::try_from(chunk.offset)
+                .map_err(|_| "PipeWire audio chunk offset overflow".to_string())?
+                % maxsize
+        };
+        let chunk_size = usize::try_from(chunk.size)
+            .map_err(|_| "PipeWire audio chunk size overflow".to_string())?
+            .min(maxsize.saturating_sub(chunk_offset));
+        let bytes = if plane.data.is_null() {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(plane.data.cast::<u8>(), maxsize) }
+        };
+        Ok(PipeWireAudioMappedBuffer {
+            bytes,
+            chunk_offset,
+            chunk_size,
+            capture_time_micros: unsafe { (*buffer).time / 1_000 },
+        })
+    }
+
+    fn write_audio_frame_to_pw_buffer(
+        buffer: *mut PwBuffer,
+        frame: &AudioFrame,
+    ) -> Result<(), String> {
+        let spa = unsafe { (*buffer).buffer };
+        if spa.is_null() {
+            return Err("PipeWire audio playback buffer did not include a SPA buffer".into());
+        }
+        let spa = unsafe { &*spa };
+        if spa.n_datas == 0 || spa.datas.is_null() {
+            return Err("PipeWire audio playback SPA buffer had no data planes".into());
+        }
+        let plane = unsafe { &mut *spa.datas };
+        if plane.data.is_null() {
+            return Err("PipeWire audio playback data plane was not mapped".into());
+        }
+        let maxsize = usize::try_from(plane.maxsize)
+            .map_err(|_| "PipeWire audio playback maxsize overflow".to_string())?;
+        if frame.payload.len() > maxsize {
+            return Err(format!(
+                "PipeWire audio playback payload too large: {} > {maxsize}",
+                frame.payload.len()
+            ));
+        }
+        let dst = unsafe { std::slice::from_raw_parts_mut(plane.data.cast::<u8>(), maxsize) };
+        dst[..frame.payload.len()].copy_from_slice(&frame.payload);
+        let chunk = if plane.chunk.is_null() {
+            return Err("PipeWire audio playback data plane had no chunk".into());
+        } else {
+            unsafe { &mut *plane.chunk }
+        };
+        chunk.offset = 0;
+        chunk.size = u32::try_from(frame.payload.len())
+            .map_err(|_| "PipeWire audio playback payload length overflow".to_string())?;
+        chunk.stride = 0;
+        chunk.flags = 0;
+        Ok(())
     }
 
     extern "C" fn on_registry_global(
@@ -817,6 +1465,55 @@ mod tests {
         let command = wpctl_set_default_command(41);
         assert_eq!(command.program, "wpctl");
         assert_eq!(command.args, ["set-default", "41"]);
+    }
+
+    #[test]
+    fn native_audio_stream_properties_target_requested_node() {
+        let capture = audio_stream_properties(&PipeWireAudioStreamRequest {
+            node_id: 42,
+            direction: PipeWireAudioStreamDirection::Capture,
+            format: AudioFormat::default(),
+        });
+        assert!(capture.contains(&("application.name".to_string(), "NexKVM".to_string())));
+        assert!(capture.contains(&("media.type".to_string(), "Audio".to_string())));
+        assert!(capture.contains(&("media.category".to_string(), "Capture".to_string())));
+        assert!(capture.contains(&("target.object".to_string(), "42".to_string())));
+
+        let playback = audio_stream_properties(&PipeWireAudioStreamRequest {
+            node_id: 41,
+            direction: PipeWireAudioStreamDirection::Playback,
+            format: AudioFormat::default(),
+        });
+        assert!(playback.contains(&("media.category".to_string(), "Playback".to_string())));
+        assert!(playback.contains(&("target.object".to_string(), "41".to_string())));
+    }
+
+    #[test]
+    fn pipewire_audio_frame_from_mapped_buffer_copies_pcm_chunk() {
+        let bytes = [0, 1, 2, 3, 4, 5, 6, 7];
+        let frame = audio_frame_from_mapped_buffer(
+            PipeWireAudioMappedBuffer {
+                bytes: &bytes,
+                chunk_offset: 2,
+                chunk_size: 4,
+                capture_time_micros: 99,
+            },
+            AudioFormat {
+                codec: AudioCodec::Pcm,
+                ..AudioFormat::default()
+            },
+            7,
+        )
+        .unwrap();
+
+        assert_eq!(frame.sequence, 7);
+        assert_eq!(frame.capture_time_micros, 99);
+        assert_eq!(
+            frame.samples_per_channel,
+            AudioFormat::default().samples_per_frame()
+        );
+        assert_eq!(frame.codec, AudioCodec::Pcm);
+        assert_eq!(frame.payload, Bytes::from_static(&[2, 3, 4, 5]));
     }
 
     #[tokio::test]

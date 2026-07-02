@@ -21,7 +21,7 @@ mod cli;
 mod connection;
 mod input_session;
 
-use cli::Command;
+use cli::{AudioSmokeAction, Command};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Permissions => return permissions().await,
         Command::PortalSmoke => return portal_smoke().await,
         Command::PipeWireSmoke => return pipewire_smoke().await,
-        Command::AudioSmoke { set_default } => return audio_smoke(set_default).await,
+        Command::AudioSmoke { action } => return audio_smoke(action).await,
         Command::Protocol => return protocol_info(),
         Command::ConfigPath => {
             println!("{}", config_path().display());
@@ -997,16 +997,22 @@ async fn pipewire_smoke() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn audio_smoke(set_default: Option<String>) -> anyhow::Result<()> {
+async fn audio_smoke(action: Option<AudioSmokeAction>) -> anyhow::Result<()> {
     println!("nexkvm audio-smoke");
     #[cfg(target_os = "linux")]
     {
         use anyhow::Context as _;
-        use nexkvm_platform_linux::{NativePipeWireAudioGraph, PipeWireAudioBackend};
-        use nexkvm_streaming::{AudioBackend, AudioDeviceId, AudioDeviceRole};
+        use nexkvm_platform_linux::{
+            NativePipeWireAudioGraph, NativePipeWireAudioStream, PipeWireAudioBackend,
+        };
+        use nexkvm_streaming::{
+            AudioBackend, AudioDeviceId, AudioDeviceRole, AudioStreamBackend,
+            route_audio_frame_once,
+        };
 
         println!("  graph: PipeWire user-session registry");
-        let backend = PipeWireAudioBackend::new(NativePipeWireAudioGraph);
+        let backend =
+            PipeWireAudioBackend::with_stream(NativePipeWireAudioGraph, NativePipeWireAudioStream);
         let devices = backend
             .devices()
             .await
@@ -1016,33 +1022,102 @@ async fn audio_smoke(set_default: Option<String>) -> anyhow::Result<()> {
             println!("  device: {}", audio_device_label(device));
         }
 
-        if let Some(target) = set_default {
-            let device = devices
-                .iter()
-                .find(|device| device.id.0 == target)
-                .ok_or_else(|| anyhow::anyhow!("audio device `{target}` was not enumerated"))?;
-            if !matches!(
-                device.role,
-                AudioDeviceRole::Playback | AudioDeviceRole::Duplex
-            ) {
-                anyhow::bail!("audio device `{target}` is not playback-capable");
+        match action {
+            None => {}
+            Some(AudioSmokeAction::SetDefault(target)) => {
+                let device = find_audio_device(&devices, &target)?;
+                ensure_audio_role(
+                    device,
+                    &[AudioDeviceRole::Playback, AudioDeviceRole::Duplex],
+                )?;
+                backend
+                    .switch_playback_device(&AudioDeviceId::new(target.clone()))
+                    .await
+                    .context("set default PipeWire playback device")?;
+                println!("  set-default: {target}");
             }
-            backend
-                .switch_playback_device(&AudioDeviceId::new(target.clone()))
+            Some(AudioSmokeAction::CaptureFrame(target)) => {
+                let device = find_audio_device(&devices, &target)?;
+                ensure_audio_role(device, &[AudioDeviceRole::Capture, AudioDeviceRole::Duplex])?;
+                println!("  capture-frame: waiting for one frame from {target}");
+                let frame = backend
+                    .capture_audio_frame(&AudioDeviceId::new(target.clone()))
+                    .await
+                    .context("capture one PipeWire audio frame")?;
+                println!(
+                    "  frame: sequence={} samples_per_channel={} codec={:?} bytes={}",
+                    frame.sequence,
+                    frame.samples_per_channel,
+                    frame.codec,
+                    frame.payload.len()
+                );
+            }
+            Some(AudioSmokeAction::Loopback { source, sink }) => {
+                let source_device = find_audio_device(&devices, &source)?;
+                ensure_audio_role(
+                    source_device,
+                    &[AudioDeviceRole::Capture, AudioDeviceRole::Duplex],
+                )?;
+                let sink_device = find_audio_device(&devices, &sink)?;
+                ensure_audio_role(
+                    sink_device,
+                    &[AudioDeviceRole::Playback, AudioDeviceRole::Duplex],
+                )?;
+                println!("  loopback: {source} -> {sink}");
+                let frame = route_audio_frame_once(
+                    &backend,
+                    &AudioDeviceId::new(source.clone()),
+                    &AudioDeviceId::new(sink.clone()),
+                )
                 .await
-                .context("set default PipeWire playback device")?;
-            println!("  set-default: {target}");
+                .context("route one PipeWire audio frame")?;
+                println!(
+                    "  frame: sequence={} samples_per_channel={} codec={:?} bytes={}",
+                    frame.sequence,
+                    frame.samples_per_channel,
+                    frame.codec,
+                    frame.payload.len()
+                );
+            }
         }
 
         println!("  status: ok");
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = set_default;
+        let _ = action;
         println!("  status: unavailable");
         println!("  reason: Linux PipeWire audio smoke is only available on Linux targets");
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn find_audio_device<'a>(
+    devices: &'a [nexkvm_streaming::AudioDevice],
+    target: &str,
+) -> anyhow::Result<&'a nexkvm_streaming::AudioDevice> {
+    devices
+        .iter()
+        .find(|device| device.id.0 == target)
+        .ok_or_else(|| anyhow::anyhow!("audio device `{target}` was not enumerated"))
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_audio_role(
+    device: &nexkvm_streaming::AudioDevice,
+    allowed: &[nexkvm_streaming::AudioDeviceRole],
+) -> anyhow::Result<()> {
+    if allowed.contains(&device.role) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "audio device `{}` has role {:?}, expected one of {:?}",
+            device.id.0,
+            device.role,
+            allowed
+        )
+    }
 }
 
 #[cfg(target_os = "linux")]

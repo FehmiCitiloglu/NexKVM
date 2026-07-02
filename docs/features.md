@@ -325,12 +325,17 @@ planned.
   `global`/`global_remove` events, parses SPA dict properties, and feeds the
   shared graph snapshot; default playback mutation is wired through
   WirePlumber's `wpctl set-default <node-id>` command path; `nexkvm
-  audio-smoke` enumerates the live user PipeWire audio graph and can exercise
-  playback default switching with `--set-default pipewire-node:<id>`; shared
+  audio-smoke` enumerates the live user PipeWire audio graph, can exercise
+  playback default switching with `--set-default pipewire-node:<id>`, capture
+  one native stream frame with `--capture-frame pipewire-node:<id>`, and route
+  one capture frame into playback with `--loopback <source> <sink>`; shared
   `AudioStreamBackend` frame capture/playback routing is modeled and
   `PipeWireAudioBackend` can route frames through a PipeWire stream adapter
-  boundary; native Linux `pw_stream` capture/playback wiring and live Linux
-  runtime validation are pending).
+  boundary; native Linux `pw_stream` capture/playback wiring is present with
+  user-session core connection, `target.object` stream properties, process
+  callback dequeue/queue, mapped PCM chunk-to-`AudioFrame` capture, and mapped
+  playback buffer writes; live Linux runtime validation plus full PipeWire audio
+  format/codec negotiation are pending).
 - [ ] Linux X11 input and clipboard fallback implementation.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.

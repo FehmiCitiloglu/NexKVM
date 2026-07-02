@@ -27,10 +27,10 @@ pub mod portal_input;
 
 pub use clipboard::LinuxClipboard;
 pub use pipewire_audio::{
-    NativePipeWireAudioGraph, PIPEWIRE_INTERFACE_NODE, PipeWireAudioBackend, PipeWireAudioGraph,
-    PipeWireAudioGraphSnapshot, PipeWireAudioNode, PipeWireAudioStream, PipeWireRegistryCollector,
-    PipeWireRegistryGlobal, StaticPipeWireAudioGraph, StaticPipeWireAudioStream,
-    UnsupportedPipeWireAudioStream,
+    NativePipeWireAudioGraph, NativePipeWireAudioStream, PIPEWIRE_INTERFACE_NODE,
+    PipeWireAudioBackend, PipeWireAudioGraph, PipeWireAudioGraphSnapshot, PipeWireAudioNode,
+    PipeWireAudioStream, PipeWireRegistryCollector, PipeWireRegistryGlobal,
+    StaticPipeWireAudioGraph, StaticPipeWireAudioStream, UnsupportedPipeWireAudioStream,
 };
 pub use pipewire_screen::{
     LinuxPipeWireScreenCapture, NativePipeWireFrameReader, PendingPipeWireFrameReader,
