@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use nexkvm_streaming::{
     AudioBackend, AudioCodec, AudioDevice, AudioDeviceId, AudioDeviceRole, AudioError, AudioFormat,
-    AudioFrame, AudioStreamBackend,
+    AudioFrame, AudioStreamBackend, SampleFormat,
 };
 use std::collections::VecDeque;
 use std::collections::{BTreeMap, HashMap};
@@ -16,6 +16,39 @@ use std::sync::{Arc, Mutex};
 
 /// PipeWire node interface type reported by registry global events.
 pub const PIPEWIRE_INTERFACE_NODE: &str = "PipeWire:Interface:Node";
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_ID: u32 = 3;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_INT: u32 = 4;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_OBJECT: u32 = 15;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_CHOICE: u32 = 19;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_TYPE_OBJECT_FORMAT: u32 = 0x40003;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_PARAM_FORMAT: u32 = 4;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_MEDIA_TYPE_AUDIO: u32 = 1;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_MEDIA_SUBTYPE_RAW: u32 = 1;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_MEDIA_TYPE: u32 = 1;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_MEDIA_SUBTYPE: u32 = 2;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_AUDIO_FORMAT: u32 = 0x10001;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_AUDIO_RATE: u32 = 0x10003;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_FORMAT_AUDIO_CHANNELS: u32 = 0x10004;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_AUDIO_FORMAT_S16_LE: u32 = 0x103;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_AUDIO_FORMAT_F32_LE: u32 = 0x11b;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const SPA_AUDIO_FORMAT_F32_BE: u32 = 0x11c;
 
 /// PipeWire graph node metadata used for audio routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,6 +406,16 @@ where
             preferred_format: AudioFormat::opus_stereo_48k(),
         }
     }
+
+    /// Create a PipeWire audio backend with explicit graph, stream, and format.
+    #[must_use]
+    pub fn with_stream_format(graph: G, stream: S, preferred_format: AudioFormat) -> Self {
+        Self {
+            graph,
+            stream,
+            preferred_format,
+        }
+    }
 }
 
 #[async_trait]
@@ -477,7 +520,164 @@ fn audio_stream_properties(request: &PipeWireAudioStreamRequest) -> Vec<(String,
         ),
         ("media.role".into(), "Music".into()),
         ("target.object".into(), request.node_id.to_string()),
+        (
+            "audio.rate".into(),
+            request.format.sample_rate_hz.to_string(),
+        ),
+        ("audio.channels".into(), request.format.channels.to_string()),
+        (
+            "audio.format".into(),
+            pipewire_audio_sample_format(request.format.sample_format).into(),
+        ),
+        (
+            "audio.codec".into(),
+            pipewire_audio_codec(request.format.codec).into(),
+        ),
     ]
+}
+
+fn pipewire_audio_sample_format(format: SampleFormat) -> &'static str {
+    match format {
+        SampleFormat::S16Le => "S16LE",
+        SampleFormat::F32Le => "F32LE",
+    }
+}
+
+fn pipewire_audio_codec(codec: AudioCodec) -> &'static str {
+    match codec {
+        AudioCodec::Pcm => "PCM",
+        AudioCodec::Opus => "OPUS",
+    }
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_audio_format_pod_bytes(bytes: &[u8]) -> Option<AudioFormat> {
+    let pod = SpaPodView::new(bytes)?;
+    if pod.type_ != SPA_TYPE_OBJECT || pod.body.len() < 8 {
+        return None;
+    }
+    let object_type = read_u32(pod.body, 0)?;
+    let object_id = read_u32(pod.body, 4)?;
+    if object_type != SPA_TYPE_OBJECT_FORMAT || object_id != SPA_PARAM_FORMAT {
+        return None;
+    }
+
+    let mut offset = 8usize;
+    let mut media_type = None;
+    let mut media_subtype = None;
+    let mut spa_format = None;
+    let mut rate = None;
+    let mut channels = None;
+
+    while offset.checked_add(16)? <= pod.body.len() {
+        let key = read_u32(pod.body, offset)?;
+        let value_size = usize::try_from(read_u32(pod.body, offset + 8)?).ok()?;
+        let value_type = read_u32(pod.body, offset + 12)?;
+        let value_start = offset + 16;
+        let value_end = value_start.checked_add(value_size)?;
+        if value_end > pod.body.len() {
+            return None;
+        }
+        let value = &pod.body[(offset + 8)..value_end];
+
+        match key {
+            SPA_FORMAT_MEDIA_TYPE => media_type = parse_spa_u32_value(value_type, value),
+            SPA_FORMAT_MEDIA_SUBTYPE => media_subtype = parse_spa_u32_value(value_type, value),
+            SPA_FORMAT_AUDIO_FORMAT => spa_format = parse_spa_u32_value(value_type, value),
+            SPA_FORMAT_AUDIO_RATE => rate = parse_spa_u32_value(value_type, value),
+            SPA_FORMAT_AUDIO_CHANNELS => channels = parse_spa_u32_value(value_type, value),
+            _ => {}
+        }
+
+        offset = value_start.checked_add(round_up_8(value_size))?;
+    }
+
+    if media_type != Some(SPA_MEDIA_TYPE_AUDIO) || media_subtype != Some(SPA_MEDIA_SUBTYPE_RAW) {
+        return None;
+    }
+    let sample_format = match spa_format? {
+        SPA_AUDIO_FORMAT_S16_LE => SampleFormat::S16Le,
+        SPA_AUDIO_FORMAT_F32_LE | SPA_AUDIO_FORMAT_F32_BE => SampleFormat::F32Le,
+        _ => return None,
+    };
+    Some(AudioFormat {
+        sample_rate_hz: rate?,
+        channels: u8::try_from(channels?).ok()?,
+        sample_format,
+        codec: AudioCodec::Pcm,
+        frame_duration_ms: AudioFormat::default().frame_duration_ms,
+    })
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn apply_spa_audio_format_pod(request: &mut PipeWireAudioStreamRequest, bytes: &[u8]) -> bool {
+    let Some(negotiated) = parse_spa_audio_format_pod_bytes(bytes) else {
+        return false;
+    };
+    request.format = AudioFormat {
+        frame_duration_ms: request.format.frame_duration_ms,
+        ..negotiated
+    };
+    true
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_u32_value(type_: u32, value: &[u8]) -> Option<u32> {
+    match type_ {
+        SPA_TYPE_ID | SPA_TYPE_INT => read_u32(value, 8),
+        SPA_TYPE_CHOICE => parse_spa_choice_first_u32(value),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn parse_spa_choice_first_u32(value: &[u8]) -> Option<u32> {
+    if value.len() < 24 {
+        return None;
+    }
+    let child_size = usize::try_from(read_u32(value, 16)?).ok()?;
+    let child_type = read_u32(value, 20)?;
+    if child_size < 4 || !matches!(child_type, SPA_TYPE_ID | SPA_TYPE_INT) {
+        return None;
+    }
+    read_u32(value, 24)
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+struct SpaPodView<'a> {
+    type_: u32,
+    body: &'a [u8],
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+impl<'a> SpaPodView<'a> {
+    fn new(bytes: &'a [u8]) -> Option<Self> {
+        if bytes.len() < 8 {
+            return None;
+        }
+        let size = usize::try_from(read_u32(bytes, 0)?).ok()?;
+        let type_ = read_u32(bytes, 4)?;
+        let end = 8usize.checked_add(size)?;
+        if end > bytes.len() {
+            return None;
+        }
+        Some(Self {
+            type_,
+            body: &bytes[8..end],
+        })
+    }
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let chunk = bytes.get(offset..end)?;
+    Some(u32::from_le_bytes(chunk.try_into().ok()?))
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const fn round_up_8(value: usize) -> usize {
+    (value + 7) & !7
 }
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
@@ -615,7 +815,8 @@ mod native_pipewire {
     use super::{
         AudioError, AudioFrame, PipeWireAudioGraphSnapshot, PipeWireAudioMappedBuffer,
         PipeWireAudioStreamDirection, PipeWireAudioStreamRequest, PipeWireRegistryCollector,
-        PipeWireRegistryGlobal, audio_frame_from_mapped_buffer, audio_stream_properties,
+        PipeWireRegistryGlobal, SPA_PARAM_FORMAT, apply_spa_audio_format_pod,
+        audio_frame_from_mapped_buffer, audio_stream_properties,
     };
     use std::collections::HashMap;
     use std::ffi::{CStr, CString, c_char, c_int, c_void};
@@ -809,6 +1010,7 @@ mod native_pipewire {
         playback_sender: Option<SyncSender<Result<(), String>>>,
         playback_frame: Option<AudioFrame>,
         playback_done: bool,
+        format_negotiated: bool,
     }
 
     unsafe extern "C" {
@@ -1053,6 +1255,7 @@ mod native_pipewire {
                 playback_sender: None,
                 playback_frame: None,
                 playback_done: false,
+                format_negotiated: false,
             };
             Self::connect(connection, data)
         }
@@ -1071,6 +1274,7 @@ mod native_pipewire {
                 playback_sender: Some(sender),
                 playback_frame: Some(frame),
                 playback_done: false,
+                format_negotiated: false,
             };
             Self::connect(connection, data)
         }
@@ -1100,7 +1304,7 @@ mod native_pipewire {
                 state_changed: None,
                 control_info: None,
                 io_changed: None,
-                param_changed: None,
+                param_changed: Some(on_audio_stream_param_changed),
                 add_buffer: None,
                 remove_buffer: None,
                 process: Some(on_audio_stream_process),
@@ -1239,6 +1443,16 @@ mod native_pipewire {
                 }
             }
         }
+    }
+
+    extern "C" fn on_audio_stream_param_changed(data: *mut c_void, id: u32, param: *const SpaPod) {
+        if data.is_null() || param.is_null() || id != SPA_PARAM_FORMAT {
+            return;
+        }
+        let pod_len = unsafe { ((*param).size as usize).saturating_add(8) };
+        let pod = unsafe { std::slice::from_raw_parts(param.cast::<u8>(), pod_len) };
+        let data = unsafe { &mut *data.cast::<AudioStreamData>() };
+        data.format_negotiated = apply_spa_audio_format_pod(&mut data.request, pod);
     }
 
     unsafe fn capture_audio_stream_frame(
@@ -1469,23 +1683,91 @@ mod tests {
 
     #[test]
     fn native_audio_stream_properties_target_requested_node() {
+        let format = AudioFormat {
+            codec: AudioCodec::Pcm,
+            ..AudioFormat::default()
+        };
         let capture = audio_stream_properties(&PipeWireAudioStreamRequest {
             node_id: 42,
             direction: PipeWireAudioStreamDirection::Capture,
-            format: AudioFormat::default(),
+            format,
         });
         assert!(capture.contains(&("application.name".to_string(), "NexKVM".to_string())));
         assert!(capture.contains(&("media.type".to_string(), "Audio".to_string())));
         assert!(capture.contains(&("media.category".to_string(), "Capture".to_string())));
         assert!(capture.contains(&("target.object".to_string(), "42".to_string())));
+        assert!(capture.contains(&("audio.rate".to_string(), "48000".to_string())));
+        assert!(capture.contains(&("audio.channels".to_string(), "2".to_string())));
+        assert!(capture.contains(&("audio.format".to_string(), "F32LE".to_string())));
+        assert!(capture.contains(&("audio.codec".to_string(), "PCM".to_string())));
 
         let playback = audio_stream_properties(&PipeWireAudioStreamRequest {
             node_id: 41,
             direction: PipeWireAudioStreamDirection::Playback,
-            format: AudioFormat::default(),
+            format,
         });
         assert!(playback.contains(&("media.category".to_string(), "Playback".to_string())));
         assert!(playback.contains(&("target.object".to_string(), "41".to_string())));
+    }
+
+    #[test]
+    fn pipewire_audio_backend_can_override_stream_format() {
+        let format = AudioFormat {
+            codec: AudioCodec::Pcm,
+            ..AudioFormat::default()
+        };
+        let backend = PipeWireAudioBackend::with_stream_format(
+            StaticPipeWireAudioGraph::new(PipeWireAudioGraphSnapshot::default()),
+            StaticPipeWireAudioStream::default(),
+            format,
+        );
+
+        assert_eq!(backend.preferred_format(), format);
+    }
+
+    #[test]
+    fn pipewire_spa_audio_format_pod_parser_extracts_pcm_info() {
+        let pod = spa_audio_format_pod_fixture(SPA_AUDIO_FORMAT_F32_LE, 48_000, 2);
+        let format = parse_spa_audio_format_pod_bytes(&pod).expect("raw audio format");
+
+        assert_eq!(
+            format,
+            AudioFormat {
+                sample_rate_hz: 48_000,
+                channels: 2,
+                sample_format: SampleFormat::F32Le,
+                codec: AudioCodec::Pcm,
+                frame_duration_ms: AudioFormat::default().frame_duration_ms,
+            }
+        );
+    }
+
+    #[test]
+    fn pipewire_audio_negotiation_updates_request_format() {
+        let mut request = PipeWireAudioStreamRequest {
+            node_id: 42,
+            direction: PipeWireAudioStreamDirection::Capture,
+            format: AudioFormat {
+                sample_rate_hz: 44_100,
+                channels: 1,
+                sample_format: SampleFormat::S16Le,
+                codec: AudioCodec::Pcm,
+                frame_duration_ms: 10,
+            },
+        };
+        let pod = spa_audio_format_pod_fixture(SPA_AUDIO_FORMAT_F32_LE, 48_000, 2);
+
+        assert!(apply_spa_audio_format_pod(&mut request, &pod));
+        assert_eq!(
+            request.format,
+            AudioFormat {
+                sample_rate_hz: 48_000,
+                channels: 2,
+                sample_format: SampleFormat::F32Le,
+                codec: AudioCodec::Pcm,
+                frame_duration_ms: 10,
+            }
+        );
     }
 
     #[test]
@@ -1556,5 +1838,43 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    fn spa_audio_format_pod_fixture(spa_format: u32, rate: u32, channels: u32) -> Vec<u8> {
+        let mut body = Vec::new();
+        push_u32(&mut body, SPA_TYPE_OBJECT_FORMAT);
+        push_u32(&mut body, SPA_PARAM_FORMAT);
+        push_spa_id_prop(&mut body, SPA_FORMAT_MEDIA_TYPE, SPA_MEDIA_TYPE_AUDIO);
+        push_spa_id_prop(&mut body, SPA_FORMAT_MEDIA_SUBTYPE, SPA_MEDIA_SUBTYPE_RAW);
+        push_spa_id_prop(&mut body, SPA_FORMAT_AUDIO_FORMAT, spa_format);
+        push_spa_int_prop(&mut body, SPA_FORMAT_AUDIO_RATE, rate);
+        push_spa_int_prop(&mut body, SPA_FORMAT_AUDIO_CHANNELS, channels);
+
+        let mut pod = Vec::new();
+        push_u32(&mut pod, u32::try_from(body.len()).expect("body len"));
+        push_u32(&mut pod, SPA_TYPE_OBJECT);
+        pod.extend_from_slice(&body);
+        pod
+    }
+
+    fn push_spa_id_prop(body: &mut Vec<u8>, key: u32, value: u32) {
+        push_spa_u32_prop(body, key, SPA_TYPE_ID, value);
+    }
+
+    fn push_spa_int_prop(body: &mut Vec<u8>, key: u32, value: u32) {
+        push_spa_u32_prop(body, key, SPA_TYPE_INT, value);
+    }
+
+    fn push_spa_u32_prop(body: &mut Vec<u8>, key: u32, type_: u32, value: u32) {
+        push_u32(body, key);
+        push_u32(body, 0);
+        push_u32(body, 4);
+        push_u32(body, type_);
+        push_u32(body, value);
+        push_u32(body, 0);
+    }
+
+    fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+        bytes.extend_from_slice(&value.to_le_bytes());
     }
 }

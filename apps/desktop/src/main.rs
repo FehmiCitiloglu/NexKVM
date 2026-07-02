@@ -1006,13 +1006,28 @@ async fn audio_smoke(action: Option<AudioSmokeAction>) -> anyhow::Result<()> {
             NativePipeWireAudioGraph, NativePipeWireAudioStream, PipeWireAudioBackend,
         };
         use nexkvm_streaming::{
-            AudioBackend, AudioDeviceId, AudioDeviceRole, AudioStreamBackend,
-            route_audio_frame_once,
+            AudioBackend, AudioCodec, AudioDeviceId, AudioDeviceRole, AudioFormat,
+            AudioStreamBackend, route_audio_frame_once,
         };
 
         println!("  graph: PipeWire user-session registry");
-        let backend =
-            PipeWireAudioBackend::with_stream(NativePipeWireAudioGraph, NativePipeWireAudioStream);
+        let stream_format = AudioFormat {
+            codec: AudioCodec::Pcm,
+            ..AudioFormat::default()
+        };
+        let backend = PipeWireAudioBackend::with_stream_format(
+            NativePipeWireAudioGraph,
+            NativePipeWireAudioStream,
+            stream_format,
+        );
+        println!(
+            "  stream-format: rate={} channels={} sample={:?} codec={:?} frame_ms={}",
+            stream_format.sample_rate_hz,
+            stream_format.channels,
+            stream_format.sample_format,
+            stream_format.codec,
+            stream_format.frame_duration_ms
+        );
         let devices = backend
             .devices()
             .await

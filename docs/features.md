@@ -334,8 +334,12 @@ planned.
   boundary; native Linux `pw_stream` capture/playback wiring is present with
   user-session core connection, `target.object` stream properties, process
   callback dequeue/queue, mapped PCM chunk-to-`AudioFrame` capture, and mapped
-  playback buffer writes; live Linux runtime validation plus full PipeWire audio
-  format/codec negotiation are pending).
+  playback buffer writes; native stream diagnostics force PCM and carry
+  rate/channel/sample-format/codec metadata in PipeWire stream properties;
+  `SPA_PARAM_Format` callbacks parse negotiated raw audio sample
+  format/rate/channel values into the active stream format; live Linux runtime
+  validation plus full PipeWire audio format pod proposal/builder negotiation
+  are pending).
 - [ ] Linux X11 input and clipboard fallback implementation.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.
