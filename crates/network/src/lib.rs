@@ -49,7 +49,9 @@ pub mod internet;
 pub mod latency;
 pub mod mesh;
 pub mod packet;
+pub mod pairing;
 pub mod quality;
+pub mod reconnect_auth;
 pub mod relay;
 pub mod remote_session;
 pub mod retry;
@@ -80,9 +82,15 @@ pub use internet::{
 pub use latency::RttTracker;
 pub use mesh::{MeshEdge, MeshLinkClass, MeshNode, MeshRoute, MeshRouter, MeshTrustLevel};
 pub use packet::{PacketBatch, ZeroCopyPacket};
+pub use pairing::{
+    PairingConfirmationPrompt, initiate_pairing_handshake, respond_pairing_handshake,
+};
 pub use quality::{
     NetworkQualityEstimator, NetworkQualityGrade, NetworkQualityRecommendation,
     NetworkQualitySample,
+};
+pub use reconnect_auth::{
+    TrustedReconnectPeer, accept_trusted_reconnect, authenticate_trusted_reconnect,
 };
 pub use relay::{RelayAdmission, RelayPolicy, RelayRegistration, RelayRoutePlan, RelayServerKind};
 pub use remote_session::{

@@ -25,6 +25,10 @@ pub enum NetworkError {
     #[error(transparent)]
     Crypto(#[from] nexkvm_crypto::CryptoError),
 
+    /// A pairing handshake message was malformed or arrived out of order.
+    #[error("pairing handshake error: {0}")]
+    Pairing(String),
+
     /// An operation exceeded its deadline.
     #[error("network operation timed out")]
     Timeout,

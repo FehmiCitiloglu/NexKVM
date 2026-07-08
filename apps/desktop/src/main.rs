@@ -18,6 +18,7 @@ use tracing::info;
 
 mod cli;
 mod connection;
+mod simulation;
 
 use cli::Command;
 
@@ -263,16 +264,9 @@ fn protocol_info() -> anyhow::Result<()> {
 
 fn simulate(path: Option<String>) -> anyhow::Result<()> {
     let path = path.unwrap_or_else(|| "tools/sim/local-workspace.toml".into());
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading simulation config from {path}"))?;
-    let devices = text
-        .lines()
-        .filter(|line| line.trim_start().starts_with("[[device]]"))
-        .count();
-    println!("simulation config: {path}");
-    println!("  devices: {devices}");
-    println!("  bytes: {}", text.len());
-    println!("  status: valid enough for local sans-IO simulation scaffolding");
+    let report = simulation::load_report(&path)
+        .with_context(|| format!("loading simulation report from {path}"))?;
+    println!("{}", cli::format_simulation_report(&path, &report));
     Ok(())
 }
 

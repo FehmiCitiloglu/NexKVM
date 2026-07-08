@@ -28,6 +28,8 @@ nexkvm-plugins.workspace = true
 nexkvm-storage.workspace = true
 nexkvm-telemetry.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 
@@ -39,6 +41,9 @@ nexkvm-platform-linux.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 nexkvm-platform-windows.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
 
 [package.metadata.deb]
 maintainer = "nexkvm contributors"

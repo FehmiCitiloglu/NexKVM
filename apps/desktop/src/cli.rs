@@ -7,6 +7,7 @@
 
 use std::fmt::Write as _;
 
+use crate::simulation::SimulationReport;
 use nexkvm_core::NativeIntegrationReport;
 use nexkvm_crypto::{PairingBootstrap, TrustEntry};
 
@@ -143,6 +144,58 @@ pub fn format_pairing(bootstrap: &PairingBootstrap) -> String {
     )
 }
 
+/// Render a validated local simulation report.
+#[must_use]
+pub fn format_simulation_report(path: &str, report: &SimulationReport) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "nexkvm simulation");
+    let _ = writeln!(out, "config: {path}");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "devices:");
+    for device in &report.devices {
+        let trust = if device.trusted {
+            "trusted"
+        } else {
+            "untrusted"
+        };
+        let _ = writeln!(
+            out,
+            "  - {} ({}) {} address={}",
+            device.id, device.os, trust, device.address
+        );
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "connections:");
+    if report.connections.is_empty() {
+        let _ = writeln!(out, "  - none");
+    } else {
+        for connection in &report.connections {
+            let _ = writeln!(
+                out,
+                "  - {} -> {}: {}",
+                connection.from,
+                connection.to,
+                connection.status.as_str()
+            );
+        }
+    }
+    let connection_label = if report.connections.len() == 1 {
+        "planned connection"
+    } else {
+        "planned connections"
+    };
+    let _ = writeln!(
+        out,
+        "\nsummary: {} devices, {} trusted, {} {}",
+        report.devices.len(),
+        report.trusted_devices(),
+        report.connections.len(),
+        connection_label
+    );
+    out.truncate(out.trim_end().len());
+    out
+}
+
 /// Render native integration availability for `nexkvm doctor`.
 #[must_use]
 pub fn format_native_integrations(report: &NativeIntegrationReport) -> String {
@@ -162,6 +215,7 @@ pub fn format_native_integrations(report: &NativeIntegrationReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulation::{ConnectionPlan, ConnectionStatus, SimulatedDevice};
     use nexkvm_crypto::PublicKey;
 
     fn entry(name: &str, key: &[u8], paired_at: u64) -> TrustEntry {
@@ -251,6 +305,43 @@ mod tests {
         assert!(rendered.contains("studio-mac"));
         assert!(rendered.contains("192.168.1.5:47654"));
         assert!(rendered.contains(&bootstrap.public_key.fingerprint()));
+    }
+
+    #[test]
+    fn simulation_report_is_rendered_without_trailing_blank_line() {
+        let report = SimulationReport {
+            devices: vec![
+                SimulatedDevice {
+                    id: "desktop".into(),
+                    name: "Desk Linux".into(),
+                    os: "linux".into(),
+                    address: "127.0.0.1:4102".parse().unwrap(),
+                    trusted: true,
+                },
+                SimulatedDevice {
+                    id: "laptop".into(),
+                    name: "Studio Laptop".into(),
+                    os: "macos".into(),
+                    address: "127.0.0.1:4101".parse().unwrap(),
+                    trusted: false,
+                },
+            ],
+            connections: vec![ConnectionPlan {
+                from: "laptop".into(),
+                to: "desktop".into(),
+                status: ConnectionStatus::BlockedByMissingTrust,
+            }],
+        };
+
+        let rendered = format_simulation_report("tools/sim/local-workspace.toml", &report);
+
+        assert!(rendered.contains("nexkvm simulation"));
+        assert!(rendered.contains("config: tools/sim/local-workspace.toml"));
+        assert!(rendered.contains("  - desktop (linux) trusted address=127.0.0.1:4102"));
+        assert!(rendered.contains("  - laptop (macos) untrusted address=127.0.0.1:4101"));
+        assert!(rendered.contains("  - laptop -> desktop: blocked-missing-trust"));
+        assert!(rendered.contains("summary: 2 devices, 1 trusted, 1 planned connection"));
+        assert!(!rendered.ends_with('\n'));
     }
 
     #[test]

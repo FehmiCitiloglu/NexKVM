@@ -48,6 +48,22 @@ cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 
 Running `cargo run -p nexkvm` with no subcommand starts the daemon.
 
+## Full Local Project Check
+
+Use one command to prepare an isolated local config/trust store under
+`target/local-test`, format/lint/test the workspace, build `nexkvm`, build the
+desktop package where supported, and run CLI smoke tests against that isolated
+config:
+
+```sh
+./scripts/test-project.sh
+```
+
+On macOS this also creates the unsigned `.app` archive through
+`scripts/package-macos.sh`. Set `NEXKVM_SKIP_PACKAGE=1` to skip package
+generation. On Linux, set `NEXKVM_RUN_LINUX_PACKAGING=1` to opt into the heavier
+`.deb`/`.rpm`/AppImage packaging path.
+
 ## Local Simulation
 
 `tools/sim/local-workspace.toml` describes a local sans-IO multi-device environment. Today the CLI validates and summarizes it; later phases can feed it into discovery, latency, workspace, screen, and collaboration simulators.

@@ -68,3 +68,23 @@ fn pair_without_uri_fails() {
     let output = nexkvm().arg("pair").output().expect("run nexkvm pair");
     assert!(!output.status.success());
 }
+
+#[test]
+fn simulate_reports_devices_and_connections() {
+    let output = nexkvm()
+        .current_dir("../..")
+        .args(["simulate", "tools/sim/local-workspace.toml"])
+        .output()
+        .expect("run nexkvm simulate");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("nexkvm simulation"));
+    assert!(stdout.contains("  - desk-macos (macos) trusted address=127.0.0.1:4101"));
+    assert!(stdout.contains("  - laptop-linux (linux-wayland) trusted address=127.0.0.1:4102"));
+    assert!(stdout.contains("  - tablet-future (android) untrusted address=127.0.0.1:4103"));
+    assert!(stdout.contains("  - desk-macos -> laptop-linux: direct-lan"));
+    assert!(stdout.contains("  - laptop-linux -> desk-macos: direct-lan"));
+    assert!(stdout.contains("  - tablet-future -> desk-macos: blocked-missing-trust"));
+    assert!(stdout.contains("summary: 3 devices, 2 trusted, 3 planned connections"));
+}

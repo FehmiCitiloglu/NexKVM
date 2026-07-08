@@ -24,6 +24,18 @@ Primary threats:
 
 The foundation supports QR/bootstrap and short-code style pairing models. Pairing must authenticate the first key exchange to prevent MITM. Future concrete cryptographic backends should use authenticated key agreement and signature verification behind the existing `crypto` interfaces.
 
+The network layer can exchange pairing request/response messages over an
+established transport and return a local confirmation prompt. That prompt is
+not trust by itself: the user must compare/approve the short code before a later
+runtime step writes the peer into the trust store. The file-backed trust path
+verifies the approved code, pins the peer public key, and flushes the JSON trust
+store before reporting success.
+
+Trusted reconnects exchange device identities after a transport connection is
+established and reject peers whose public key is not already pinned in the local
+trust store. A later signing/challenge-response step must prove private-key
+ownership before this becomes a complete cryptographic authentication story.
+
 ## Transport Security
 
 Preferred transport order:

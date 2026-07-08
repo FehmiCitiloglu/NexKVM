@@ -649,7 +649,10 @@ dependencies = [
  "nexkvm-storage",
  "nexkvm-streaming",
  "nexkvm-telemetry",
+ "serde",
+ "tempfile",
  "tokio",
+ "toml",
  "tracing",
 ]
 

@@ -10,7 +10,10 @@ This directory collects the stable design contracts for nexkvm. Research notes l
 - [Plugins](plugins.md): plugin manifests, runtime model, sandbox profiles, marketplace policy, and hot reload.
 - [API Documentation](api.md): how to build and navigate Rust API docs for the workspace.
 - [Tooling](tooling.md): integration tests, fuzzing, benchmarks, CLI tools, simulation, CI, and release workflows.
-- [Feature List](features.md): implemented/planned feature tracker used as a lightweight project-management checklist.
+- [Feature List](features.md): source-of-truth implemented/planned feature
+  tracker. Check it before starting work, add new planned features there before
+  implementation, and mark items complete only after verified repository
+  changes land.
 - [Release Readiness](release-readiness.md): production gates, security requirements, platform smoke checks, and artifact expectations.
 
 ## Contribution Entry Point

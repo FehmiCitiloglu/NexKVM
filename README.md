@@ -39,6 +39,14 @@ cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 
 Running `cargo run -p nexkvm` with no subcommand starts the desktop daemon and waits for shutdown.
 
+For a single local command that prepares an isolated test config, checks the
+workspace, builds `nexkvm`, builds the desktop package where supported, and runs
+CLI smoke tests:
+
+```sh
+./scripts/test-project.sh
+```
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)

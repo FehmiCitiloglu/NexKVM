@@ -17,7 +17,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use nexkvm_crypto::{PublicKey, TrustEntry, TrustStore};
+use std::time::Instant;
+
+use nexkvm_crypto::{
+    CryptoError, DeviceIdentity, PairingSession, PublicKey, TrustEntry, TrustStore,
+};
 use thiserror::Error;
 
 /// Errors loading or persisting the trust registry.
@@ -30,6 +34,10 @@ pub enum TrustStoreError {
     /// Failed to (de)serialize trust entries.
     #[error("trust store json error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// Pairing confirmation failed before the peer could be persisted.
+    #[error(transparent)]
+    Crypto(#[from] CryptoError),
 }
 
 /// A JSON-file-backed [`TrustStore`].
@@ -83,6 +91,30 @@ impl FileTrustStore {
         self.write(&snapshot)
     }
 
+    /// Verify a user-confirmed pairing code, pin the peer, and confirm the
+    /// updated trust store reached disk.
+    ///
+    /// This is the runtime write path after the network/crypto pairing flow has
+    /// displayed a confirmation code and the user approved it. The peer is only
+    /// inserted when `entered_code` matches the expected code for `session`.
+    ///
+    /// # Errors
+    /// Returns [`TrustStoreError::Crypto`] if the code is wrong or the pairing
+    /// token is expired/used. Returns [`TrustStoreError::Io`] or
+    /// [`TrustStoreError::Json`] if the file-backed store cannot be flushed.
+    pub fn confirm_pairing(
+        &self,
+        session: &mut PairingSession,
+        entered_code: &str,
+        peer: &DeviceIdentity,
+        paired_at: u64,
+        now: Instant,
+    ) -> Result<TrustEntry, TrustStoreError> {
+        let entry = session.verify_and_accept(entered_code, peer, paired_at, now, self)?;
+        self.flush()?;
+        Ok(entry)
+    }
+
     fn write(&self, entries: &[TrustEntry]) -> Result<(), TrustStoreError> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -124,12 +156,20 @@ impl TrustStore for FileTrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nexkvm_crypto::{DEFAULT_PAIRING_TTL, PairingState};
 
     fn entry(name: &str, key: &[u8]) -> TrustEntry {
         TrustEntry {
             display_name: name.into(),
             public_key: PublicKey(key.to_vec()),
             paired_at: 1_700_000_000,
+        }
+    }
+
+    fn identity(name: &str, key: &[u8]) -> DeviceIdentity {
+        DeviceIdentity {
+            display_name: name.into(),
+            public_key: PublicKey(key.to_vec()),
         }
     }
 
@@ -170,5 +210,51 @@ mod tests {
         let path = dir.path().join("does-not-exist.json");
         let store = FileTrustStore::load(&path).unwrap();
         assert!(store.entries().is_empty());
+    }
+
+    #[test]
+    fn confirmed_pairing_pins_peer_and_flushes_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust.json");
+        let store = FileTrustStore::load(&path).unwrap();
+        let now = Instant::now();
+        let local = identity("desk-macos", &[1, 2, 3, 4]);
+        let peer = identity("laptop-linux", &[9, 8, 7, 6]);
+        let mut session =
+            PairingSession::initiate(local, "127.0.0.1:4101", [7u8; 32], now, DEFAULT_PAIRING_TTL);
+        let code = session.confirmation_code(&peer.public_key, now).unwrap();
+
+        let entry = store
+            .confirm_pairing(&mut session, code.as_str(), &peer, 1_700_000_000, now)
+            .unwrap();
+
+        assert_eq!(entry.display_name, "laptop-linux");
+        assert_eq!(session.state(), PairingState::Paired);
+        let reloaded = FileTrustStore::load(&path).unwrap();
+        assert!(reloaded.is_trusted(&peer.public_key));
+    }
+
+    #[test]
+    fn wrong_confirmation_code_does_not_write_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust.json");
+        let store = FileTrustStore::load(&path).unwrap();
+        let now = Instant::now();
+        let local = identity("desk-macos", &[1, 2, 3, 4]);
+        let peer = identity("laptop-linux", &[9, 8, 7, 6]);
+        let mut session =
+            PairingSession::initiate(local, "127.0.0.1:4101", [7u8; 32], now, DEFAULT_PAIRING_TTL);
+
+        let err = store
+            .confirm_pairing(&mut session, "000000", &peer, 1_700_000_000, now)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            TrustStoreError::Crypto(CryptoError::PairingMismatch)
+        ));
+        assert_eq!(session.state(), PairingState::Failed);
+        assert!(store.entries().is_empty());
+        assert!(!path.exists());
     }
 }

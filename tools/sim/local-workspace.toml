@@ -10,31 +10,52 @@ loss = 0.0
 throughput_bps = 100000000
 
 [[device]]
+id = "desk-macos"
 name = "desk-macos"
 os = "macos"
 role = "server"
+address = "127.0.0.1:4101"
+trusted = true
 x = 0
 y = 0
 width = 1728
 height = 1117
 
 [[device]]
+id = "laptop-linux"
 name = "laptop-linux"
 os = "linux-wayland"
 role = "client"
+address = "127.0.0.1:4102"
+trusted = true
 x = 1728
 y = 0
 width = 1920
 height = 1080
 
 [[device]]
+id = "tablet-future"
 name = "tablet-future"
 os = "android"
 role = "client"
+address = "127.0.0.1:4103"
+trusted = false
 x = -1200
 y = 100
 width = 1200
 height = 800
+
+[[connection]]
+from = "desk-macos"
+to = "laptop-linux"
+
+[[connection]]
+from = "laptop-linux"
+to = "desk-macos"
+
+[[connection]]
+from = "tablet-future"
+to = "desk-macos"
 
 [features]
 clipboard = true

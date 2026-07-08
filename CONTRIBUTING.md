@@ -22,6 +22,10 @@ cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 
 ## Development Principles
 
+- Treat `docs/features.md` as the source-of-truth project tracker: check it
+  before choosing work, add any new planned feature there before implementing
+  it, and move or mark items complete only after the implementation and
+  verification have landed.
 - Keep platform-specific code in `crates/platform/*` behind safe traits.
 - Prefer Sans-IO state machines for policy, routing, negotiation, and scheduling.
 - Keep async APIs async-first; never block Tokio on native I/O or heavy CPU work.
@@ -65,6 +69,7 @@ cargo bench -p nexkvm-network --bench latency_suite
 
 When changing behavior or public APIs, update relevant docs:
 
+- `docs/features.md`
 - `docs/architecture.md`
 - `docs/protocol.md`
 - `docs/security.md`

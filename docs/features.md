@@ -3,12 +3,16 @@
 This file is the project feature tracker for NexKVM. Keep it updated as work
 lands:
 
+- Check this file before starting implementation work.
+- New feature work must be added here as planned before implementation starts.
 - `[ ]` means planned or not production-ready.
 - `[x]` means implemented in the repository at the stated level.
 - Move an item from "Planned Features" to "Implemented Features" when it
   becomes a working repository feature, not just a design note.
 - If a feature is implemented only as a model, trait boundary, or planner, keep
   that scope explicit.
+- If only part of a broader feature lands, split the remaining work into a
+  clearly scoped planned item instead of marking the whole feature complete.
 
 ## Current Project Phase
 
@@ -61,6 +65,8 @@ planned.
 - [x] Short confirmation/fingerprint display flow.
 - [x] In-memory trust store.
 - [x] File-backed trust store.
+- [x] Trust-store write path after confirmed pairing with code verification and
+  flush confirmation.
 - [x] Session security trait boundary.
 - [x] ChaCha20-Poly1305 AEAD session security implementation.
 - [x] Monotonic message ID and nonce-based replay-protection model.
@@ -99,6 +105,10 @@ planned.
 - [x] Mesh routing policy model.
 - [x] Relay admission and route policy model.
 - [x] Browser remote-session ticket planning.
+- [x] User-confirmed pairing request/response exchange over a transport
+  connection, returning a confirmation prompt without trust-store writes.
+- [x] Authenticated reconnect path for trusted devices using transport identity
+  exchange and trust-store public-key matching.
 - [x] Latency benchmark suite.
 
 ### Input
@@ -209,6 +219,16 @@ planned.
 - [x] Windows NSIS installer script.
 - [x] Package helper scripts.
 
+### Simulation And Developer Experience
+
+- [x] Typed TOML parsing for `nexkvm simulate`.
+- [x] Simulation validation for empty, duplicated, malformed, or unknown devices.
+- [x] Simulation output with device ID, display name, OS, address, and trust
+  state.
+- [x] Simulation connection planning for direct LAN, missing trust, and invalid
+  configuration.
+- [x] Stable integration test for simulation report output.
+
 ### Platform Capability Foundations
 
 - [x] macOS platform backend skeleton.
@@ -244,9 +264,7 @@ planned.
 ### Networking And Sessions
 
 - [ ] Real network dial on trusted peer rediscovery.
-- [ ] User-confirmed pairing handshake over the network.
-- [ ] Trust-store write path after confirmed pairing.
-- [ ] Authenticated reconnect path for trusted devices.
+- [ ] Cryptographic proof-of-key ownership for trusted reconnects.
 - [ ] TCP transport hardened with TLS.
 - [ ] QUIC transport fully wired as preferred LAN path.
 - [ ] App-layer session security wired into all transport traffic.
@@ -315,13 +333,7 @@ planned.
 
 ### Simulation And Developer Experience
 
-- [ ] Typed TOML parsing for `nexkvm simulate`.
-- [ ] Simulation validation for empty, duplicated, malformed, or unknown devices.
-- [ ] Simulation output with device ID, display name, OS, address, and trust
-  state.
-- [ ] Simulation connection planning for direct LAN, reconnect candidate,
-  missing trust, and invalid configuration.
-- [ ] Stable integration test for simulation report output.
+- [ ] Simulation reconnect-candidate planning.
 - [ ] Feed simulation data into discovery, latency, workspace, screen, and
   collaboration simulators.
 
