@@ -1,13 +1,12 @@
 //! Windows platform backend.
 //!
-//! Real integration uses Win32: low-level hooks (`SetWindowsHookEx`) / Raw Input
-//! for capture, `SendInput` for injection, and the clipboard API. Note that
+//! Real integration uses Win32: low-level hooks (`SetWindowsHookEx`) for
+//! capture, `SendInput` for injection, and the clipboard API. Note that
 //! User Interface Privilege Isolation (UIPI) can block injection into windows
 //! owned by higher-integrity (elevated) processes; nexkvm surfaces this via
 //! capabilities rather than failing silently.
 //!
-//! FFI lands in a later phase; this is the skeleton. Compiled only on Windows;
-//! an empty library elsewhere.
+//! Compiled only on Windows; an empty library elsewhere.
 
 #![cfg(target_os = "windows")]
 
@@ -15,7 +14,13 @@ use async_trait::async_trait;
 use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
 use nexkvm_core::{CoreError, OsKind};
 
+pub mod capture;
+pub mod clipboard;
 pub mod inject;
+
+pub use capture::WindowsInputCapture;
+pub use clipboard::WindowsClipboard;
+pub use inject::WindowsInputInjector;
 
 /// Windows implementation of [`PlatformBackend`].
 #[derive(Debug, Default)]
@@ -39,16 +44,14 @@ impl PlatformBackend for WindowsBackend {
         // Windows generally permits these without a prompt; the real impl
         // verifies hook installation and UIPI constraints at runtime.
         PlatformCapabilities {
-            can_inject_input: false,
-            can_capture_input: false,
-            can_access_clipboard: false,
+            can_inject_input: true,
+            can_capture_input: true,
+            can_access_clipboard: true,
             permission_pending: false,
         }
     }
 
     async fn request_permissions(&self) -> Result<PlatformCapabilities, CoreError> {
-        Err(CoreError::Unsupported(
-            "Windows backend not yet implemented",
-        ))
+        Ok(self.capabilities())
     }
 }

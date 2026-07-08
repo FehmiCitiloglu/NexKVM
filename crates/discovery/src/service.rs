@@ -137,8 +137,11 @@ impl DiscoveryService {
         &self,
         info: &DeviceInfo,
         listen_addr: SocketAddr,
+        fingerprint: Option<&str>,
     ) -> Result<mpsc::Receiver<ReconnectTarget>, DiscoveryError> {
-        self.discovery.advertise(info, listen_addr).await?;
+        self.discovery
+            .advertise(info, listen_addr, fingerprint)
+            .await?;
 
         let (tx, rx) = mpsc::channel(self.config.channel_capacity);
         let discovery = Arc::clone(&self.discovery);
@@ -233,6 +236,7 @@ mod tests {
             &self,
             _info: &DeviceInfo,
             addr: SocketAddr,
+            _fingerprint: Option<&str>,
         ) -> Result<(), DiscoveryError> {
             *self.advertised.lock().unwrap() = Some(addr);
             Ok(())
@@ -276,7 +280,7 @@ mod tests {
 
         let info = DeviceInfo::new("self", OsKind::MacOs);
         let addr: SocketAddr = "0.0.0.0:47654".parse().unwrap();
-        let mut rx = service.start(&info, addr).await.unwrap();
+        let mut rx = service.start(&info, addr, Some("self-fp")).await.unwrap();
 
         let target = tokio::time::timeout(Duration::from_secs(1), rx.recv())
             .await
@@ -302,7 +306,7 @@ mod tests {
 
         let info = DeviceInfo::new("self", OsKind::MacOs);
         let mut rx = service
-            .start(&info, "0.0.0.0:47654".parse().unwrap())
+            .start(&info, "0.0.0.0:47654".parse().unwrap(), Some("self-fp"))
             .await
             .unwrap();
 

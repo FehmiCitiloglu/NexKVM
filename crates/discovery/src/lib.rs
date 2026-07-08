@@ -88,7 +88,12 @@ pub trait Discovery: Send + Sync {
     ///
     /// # Errors
     /// Returns [`DiscoveryError`] if advertising cannot start.
-    async fn advertise(&self, info: &DeviceInfo, addr: SocketAddr) -> Result<(), DiscoveryError>;
+    async fn advertise(
+        &self,
+        info: &DeviceInfo,
+        addr: SocketAddr,
+        fingerprint: Option<&str>,
+    ) -> Result<(), DiscoveryError>;
 
     /// Return the peers currently visible on the network.
     ///

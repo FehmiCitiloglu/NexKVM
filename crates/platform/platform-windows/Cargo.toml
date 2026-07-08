@@ -14,4 +14,19 @@ workspace = true
 [dependencies]
 nexkvm-core.workspace = true
 nexkvm-input.workspace = true
+nexkvm-clipboard.workspace = true
 async-trait.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Memory",
+    "Win32_System_DataExchange",
+] }
+clipboard-win = "5"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

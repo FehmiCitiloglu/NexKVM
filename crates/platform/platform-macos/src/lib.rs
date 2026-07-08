@@ -1,9 +1,10 @@
 //! macOS platform backend.
 //!
 //! Input capture/injection requires **Accessibility** trust, which this backend
-//! can query and prompt for. Real event capture, event posting, clipboard, and
-//! display capture APIs land behind the same [`PlatformBackend`] boundary in
-//! later phases.
+//! can query and prompt for. Clipboard text read/write is available via
+//! [`MacosClipboard`], while richer pasteboard formats and display capture
+//! continue to land behind the same [`PlatformBackend`] boundary in later
+//! phases.
 //!
 //! Compiled only on macOS; on other targets this crate is an empty library so
 //! the workspace builds everywhere.
@@ -15,7 +16,20 @@ use nexkvm_core::platform::{PlatformBackend, PlatformCapabilities};
 use nexkvm_core::{CoreError, OsKind};
 
 mod accessibility;
+pub mod capture;
+pub mod clipboard;
 pub mod inject;
+mod pasteboard;
+pub mod permissions;
+pub mod screen_capture;
+pub mod screen_encoder;
+
+pub use capture::MacosInputCapture;
+pub use clipboard::MacosClipboard;
+pub use inject::MacosInputInjector;
+pub use permissions::{MacosInputPermissionReport, MacosPermissionState};
+pub use screen_capture::MacosScreenCapture;
+pub use screen_encoder::MacosVideoToolboxEncoder;
 
 /// macOS implementation of [`PlatformBackend`].
 #[derive(Debug)]
@@ -41,6 +55,12 @@ impl MacosBackend {
         Self {
             accessibility: Box::new(accessibility),
         }
+    }
+
+    /// Report macOS input permission readiness for diagnostics.
+    #[must_use]
+    pub fn input_permission_report(&self) -> MacosInputPermissionReport {
+        permissions::input_permission_report(self.accessibility.as_ref())
     }
 }
 
@@ -71,7 +91,7 @@ fn capabilities_from_accessibility(accessibility_trusted: bool) -> PlatformCapab
     PlatformCapabilities {
         can_inject_input: accessibility_trusted,
         can_capture_input: accessibility_trusted,
-        can_access_clipboard: false,
+        can_access_clipboard: true,
         permission_pending: !accessibility_trusted,
     }
 }
@@ -108,7 +128,7 @@ mod tests {
             PlatformCapabilities {
                 can_inject_input: false,
                 can_capture_input: false,
-                can_access_clipboard: false,
+                can_access_clipboard: true,
                 permission_pending: true,
             }
         );
@@ -126,7 +146,7 @@ mod tests {
             PlatformCapabilities {
                 can_inject_input: true,
                 can_capture_input: true,
-                can_access_clipboard: false,
+                can_access_clipboard: true,
                 permission_pending: false,
             }
         );
@@ -144,7 +164,7 @@ mod tests {
             PlatformCapabilities {
                 can_inject_input: true,
                 can_capture_input: true,
-                can_access_clipboard: false,
+                can_access_clipboard: true,
                 permission_pending: false,
             }
         );

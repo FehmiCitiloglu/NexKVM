@@ -22,5 +22,9 @@
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
+  <key>NSInputMonitoringUsageDescription</key>
+  <string>NexKVM needs Input Monitoring to capture keyboard and mouse input for sharing with your trusted devices.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>NexKVM may use Apple Events only for trusted local automation integrations.</string>
 </dict>
 </plist>

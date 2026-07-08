@@ -30,7 +30,9 @@ mod trust;
 
 pub use coordinator::{ConfirmationCode, DEFAULT_PAIRING_TTL, PairingRole, PairingSession};
 pub use error::CryptoError;
-pub use identity::{DeviceIdentity, PublicKey};
+pub use identity::{
+    DeviceIdentity, DeviceKeypair, IdentitySignature, PublicKey, verify_identity_signature,
+};
 pub use pairing::{PairingMethod, PairingRequest, PairingResponse, PairingState};
 pub use qr::{NONCE_LEN, PairingBootstrap};
 pub use session::{AeadSessionSecurity, SessionKeys, SessionSecurity};

@@ -14,7 +14,15 @@ workspace = true
 [dependencies]
 nexkvm-core.workspace = true
 nexkvm-input.workspace = true
+nexkvm-clipboard.workspace = true
+nexkvm-streaming.workspace = true
 async-trait.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+bytes.workspace = true
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSArray", "NSData", "NSAutoreleasePool"] }
+objc2-app-kit = { version = "0.2", features = ["NSPasteboard", "NSPasteboardItem"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

@@ -43,7 +43,10 @@ async fn discovers_and_targets_trusted_peer_over_udp() {
     );
 
     let listen: SocketAddr = "0.0.0.0:47654".parse().unwrap();
-    let mut targets = service.start(&local, listen).await.unwrap();
+    let mut targets = service
+        .start(&local, listen, Some("local-fp"))
+        .await
+        .unwrap();
 
     // A trusted peer announces itself via unicast to the local discovery port.
     let peer = DeviceInfo::new("peer", OsKind::Linux);

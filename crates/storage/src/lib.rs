@@ -22,8 +22,10 @@ use nexkvm_telemetry::TelemetryConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod identity;
 mod trust;
 
+pub use identity::{FileDeviceIdentityStore, IdentityStoreError};
 pub use trust::{FileTrustStore, TrustStoreError};
 
 /// Errors loading or saving configuration.
@@ -52,6 +54,8 @@ pub struct Config {
     pub network: NetworkConfig,
     /// Security & pairing policy.
     pub security: SecurityConfig,
+    /// Keyboard/mouse sharing runtime settings.
+    pub input: InputConfig,
     /// Logging/diagnostics.
     pub telemetry: TelemetryConfig,
     /// Plugin runtime settings.
@@ -84,6 +88,8 @@ impl Default for DeviceConfig {
 pub struct NetworkConfig {
     /// Port to listen on for incoming connections.
     pub listen_port: u16,
+    /// Optional explicit peer address to dial on startup (`host:port`).
+    pub connect_addr: Option<String>,
     /// Whether to advertise this device on the LAN for discovery.
     pub enable_discovery: bool,
     /// Preferred transports in priority order (e.g. `["quic", "tcp"]`).
@@ -94,6 +100,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             listen_port: 47_654,
+            connect_addr: None,
             enable_discovery: true,
             transports: vec!["quic".into(), "tcp".into()],
         }
@@ -117,6 +124,65 @@ impl Default for SecurityConfig {
             trust_on_reconnect: true,
         }
     }
+}
+
+/// `[input]` section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InputConfig {
+    /// Runtime role for keyboard/mouse sharing.
+    pub control_role: InputControlRole,
+    /// Friendly trusted-peer name or fingerprint selected as the active target.
+    pub active_peer: Option<String>,
+    /// Which local desktop edge hands control to the active peer.
+    pub handoff_edge: InputHandoffEdge,
+    /// HID usage id for the emergency stop key. Default 41 is Escape.
+    pub emergency_stop_keycode: u32,
+    /// Remote focus is released after this many milliseconds without captured
+    /// input. Set to 0 to disable the timeout.
+    pub remote_focus_timeout_millis: u64,
+}
+
+impl Default for InputConfig {
+    fn default() -> Self {
+        Self {
+            control_role: InputControlRole::Disabled,
+            active_peer: None,
+            handoff_edge: InputHandoffEdge::Right,
+            emergency_stop_keycode: 41,
+            remote_focus_timeout_millis: 3_000,
+        }
+    }
+}
+
+/// Local desktop edge used to hand control to a peer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputHandoffEdge {
+    /// Left edge.
+    Left,
+    /// Right edge.
+    #[default]
+    Right,
+    /// Top edge.
+    Top,
+    /// Bottom edge.
+    Bottom,
+}
+
+/// Whether this daemon captures, injects, both, or neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputControlRole {
+    /// Do not run keyboard/mouse sharing.
+    #[default]
+    Disabled,
+    /// Capture local input and send it to `active_peer`.
+    Source,
+    /// Inject input received from a trusted peer.
+    Target,
+    /// Enable source and target behavior.
+    Both,
 }
 
 /// `[plugins]` section.
@@ -272,6 +338,56 @@ mod tests {
             parsed.collaboration.default_control_lease_millis,
             cfg.collaboration.default_control_lease_millis
         );
+        assert_eq!(parsed.input.control_role, cfg.input.control_role);
+        assert_eq!(
+            parsed.input.emergency_stop_keycode,
+            cfg.input.emergency_stop_keycode
+        );
+    }
+
+    #[test]
+    fn input_config_round_trips_through_toml() {
+        let text = r#"
+[input]
+control_role = "source"
+active_peer = "studio-mac"
+handoff_edge = "right"
+emergency_stop_keycode = 41
+remote_focus_timeout_millis = 3000
+"#;
+
+        let parsed: Config = toml::from_str(text).unwrap();
+
+        assert_eq!(parsed.input.control_role, InputControlRole::Source);
+        assert_eq!(parsed.input.active_peer.as_deref(), Some("studio-mac"));
+        assert_eq!(parsed.input.handoff_edge, InputHandoffEdge::Right);
+        assert_eq!(parsed.input.emergency_stop_keycode, 41);
+        assert_eq!(parsed.input.remote_focus_timeout_millis, 3_000);
+
+        let rendered = toml::to_string_pretty(&parsed).unwrap();
+        assert!(rendered.contains("[input]"));
+        assert!(rendered.contains("control_role = \"source\""));
+    }
+
+    #[test]
+    fn network_connect_addr_round_trips_through_toml() {
+        let text = r#"
+[network]
+listen_port = 47654
+enable_discovery = true
+connect_addr = "192.168.1.27:47654"
+transports = ["tcp"]
+"#;
+
+        let parsed: Config = toml::from_str(text).unwrap();
+
+        assert_eq!(
+            parsed.network.connect_addr.as_deref(),
+            Some("192.168.1.27:47654")
+        );
+
+        let rendered = toml::to_string_pretty(&parsed).unwrap();
+        assert!(rendered.contains("connect_addr = \"192.168.1.27:47654\""));
     }
 
     #[test]

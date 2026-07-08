@@ -18,6 +18,23 @@ pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 
 const LEN_PREFIX: usize = 4;
 
+fn classify_non_protocol_probe(prefix: [u8; LEN_PREFIX]) -> Option<&'static str> {
+    // Common local/port-scan HTTP probes.
+    if matches!(
+        &prefix,
+        b"GET " | b"POST" | b"HEAD" | b"PUT " | b"OPTI" | b"PATC" | b"DELE"
+    ) {
+        return Some("http");
+    }
+
+    // TLS ClientHello starts with 0x16 0x03 xx xx.
+    if prefix[0] == 0x16 && prefix[1] == 0x03 {
+        return Some("tls");
+    }
+
+    None
+}
+
 /// Stateless encoder/decoder for length-prefixed frames.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FrameCodec;
@@ -57,7 +74,12 @@ impl FrameCodec {
         }
 
         // Peek the length prefix without consuming it yet.
-        let len = u32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
+        let prefix = [src[0], src[1], src[2], src[3]];
+        if let Some(kind) = classify_non_protocol_probe(prefix) {
+            return Err(ProtocolError::ProtocolMismatch(kind));
+        }
+
+        let len = u32::from_be_bytes(prefix) as usize;
         if len > MAX_FRAME_LEN {
             return Err(ProtocolError::FrameTooLarge {
                 len,
@@ -109,6 +131,26 @@ mod tests {
         assert!(matches!(
             codec.decode(&mut buf),
             Err(ProtocolError::FrameTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_http_probe_prefix() {
+        let codec = FrameCodec;
+        let mut buf = BytesMut::from(&b"GET / HTTP/1.1\r\n"[..]);
+        assert!(matches!(
+            codec.decode(&mut buf),
+            Err(ProtocolError::ProtocolMismatch("http"))
+        ));
+    }
+
+    #[test]
+    fn rejects_tls_probe_prefix() {
+        let codec = FrameCodec;
+        let mut buf = BytesMut::from(&[0x16, 0x03, 0x03, 0x01][..]);
+        assert!(matches!(
+            codec.decode(&mut buf),
+            Err(ProtocolError::ProtocolMismatch("tls"))
         ));
     }
 }

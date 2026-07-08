@@ -18,6 +18,17 @@ pub enum Command {
     Run,
     /// Print local platform/config diagnostics.
     Doctor,
+    /// Prompt/report platform permissions needed by native integrations.
+    Permissions,
+    /// Run a Linux Wayland portal input smoke diagnostic.
+    PortalSmoke,
+    /// Run a Linux PipeWire ScreenCast smoke diagnostic.
+    PipeWireSmoke,
+    /// Run a Linux PipeWire audio graph smoke diagnostic.
+    AudioSmoke {
+        /// Optional live audio action to run after graph enumeration.
+        action: Option<AudioSmokeAction>,
+    },
     /// Print protocol compatibility info.
     Protocol,
     /// Print the resolved config path.
@@ -28,14 +39,34 @@ pub enum Command {
     Pair {
         /// The scanned/pasted `nexkvm://pair/v1/...` URI.
         uri: String,
+        /// Persist this peer into the local trust store after user confirmation.
+        accept: bool,
+    },
+    /// Generate this device's pairing bootstrap URI.
+    PairingUri {
+        /// Address peers should dial (`ip:port`).
+        addr: String,
     },
     /// Validate a local simulation config.
     Simulate {
         /// Optional path to the simulation TOML.
         path: Option<String>,
+        /// Emit only machine-readable JSON output.
+        json_only: bool,
     },
     /// Print CLI usage.
     Help,
+}
+
+/// Optional `audio-smoke` live action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioSmokeAction {
+    /// Set platform default playback endpoint.
+    SetDefault(String),
+    /// Capture one frame from a PipeWire source node.
+    CaptureFrame(String),
+    /// Capture one frame from source and play it to sink.
+    Loopback { source: String, sink: String },
 }
 
 /// A fully parsed CLI invocation: the subcommand plus global flags.
@@ -75,21 +106,139 @@ where
     let command = match it.next().as_deref() {
         None => Command::Run,
         Some("doctor") => Command::Doctor,
+        Some("permissions") => Command::Permissions,
+        Some("portal-smoke") => {
+            if it.next().is_some() {
+                return Err("portal-smoke accepts no arguments".to_string());
+            }
+            Command::PortalSmoke
+        }
+        Some("pipewire-smoke") => {
+            if it.next().is_some() {
+                return Err("pipewire-smoke accepts no arguments".to_string());
+            }
+            Command::PipeWireSmoke
+        }
+        Some("audio-smoke") => parse_audio_smoke_args(it)?,
         Some("protocol") => Command::Protocol,
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
-        Some("pair") => {
-            let uri = it
-                .next()
-                .ok_or_else(|| "pair requires a nexkvm:// pairing uri".to_string())?;
-            Command::Pair { uri }
+        Some("pair") => parse_pair_args(it)?,
+        Some("pairing-uri") => {
+            let addr = it.next().ok_or_else(|| {
+                "pairing-uri requires an address like 192.168.1.20:47654".to_string()
+            })?;
+            if it.next().is_some() {
+                return Err("pairing-uri accepts one address".to_string());
+            }
+            Command::PairingUri { addr }
         }
-        Some("simulate") => Command::Simulate { path: it.next() },
+        Some("simulate") => parse_simulate_args(it)?,
         Some("help" | "--help" | "-h") => Command::Help,
         Some(other) => return Err(format!("unknown command `{other}`; run `nexkvm help`")),
     };
 
     Ok(Invocation { command, debug })
+}
+
+fn parse_pair_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut accept = false;
+    let mut uri = None;
+    for arg in args {
+        if arg == "--accept" {
+            accept = true;
+        } else if uri.is_none() {
+            uri = Some(arg);
+        } else {
+            return Err("pair accepts one nexkvm:// pairing uri".to_string());
+        }
+    }
+    let uri = uri.ok_or_else(|| "pair requires a nexkvm:// pairing uri".to_string())?;
+    Ok(Command::Pair { uri, accept })
+}
+
+fn parse_simulate_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut json_only = false;
+    let mut path = None;
+    for arg in args {
+        if arg == "--simulate-json-only" || arg == "--json-only" {
+            json_only = true;
+        } else if path.is_none() {
+            path = Some(arg);
+        } else {
+            return Err(
+                "simulate accepts at most one path plus optional --simulate-json-only".to_string(),
+            );
+        }
+    }
+    Ok(Command::Simulate { path, json_only })
+}
+
+fn parse_audio_smoke_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut it = args.into_iter();
+    match it.next() {
+        None => Ok(Command::AudioSmoke { action: None }),
+        Some(flag) if flag == "--set-default" => {
+            let target = it.next().ok_or_else(|| {
+                "audio-smoke --set-default requires pipewire-node:<id>".to_string()
+            })?;
+            if it.next().is_some() {
+                return Err(
+                    "audio-smoke accepts one action: --set-default, --capture-frame, or --loopback"
+                        .to_string(),
+                );
+            }
+            Ok(Command::AudioSmoke {
+                action: Some(AudioSmokeAction::SetDefault(target)),
+            })
+        }
+        Some(flag) if flag == "--capture-frame" => {
+            let target = it.next().ok_or_else(|| {
+                "audio-smoke --capture-frame requires pipewire-node:<id>".to_string()
+            })?;
+            if it.next().is_some() {
+                return Err(
+                    "audio-smoke accepts one action: --set-default, --capture-frame, or --loopback"
+                        .to_string(),
+                );
+            }
+            Ok(Command::AudioSmoke {
+                action: Some(AudioSmokeAction::CaptureFrame(target)),
+            })
+        }
+        Some(flag) if flag == "--loopback" => {
+            let source = it.next().ok_or_else(|| {
+                "audio-smoke --loopback requires source and sink pipewire-node:<id> targets"
+                    .to_string()
+            })?;
+            let sink = it.next().ok_or_else(|| {
+                "audio-smoke --loopback requires source and sink pipewire-node:<id> targets"
+                    .to_string()
+            })?;
+            if it.next().is_some() {
+                return Err(
+                    "audio-smoke accepts one action: --set-default, --capture-frame, or --loopback"
+                        .to_string(),
+                );
+            }
+            Ok(Command::AudioSmoke {
+                action: Some(AudioSmokeAction::Loopback { source, sink }),
+            })
+        }
+        Some(_) => Err(
+            "audio-smoke accepts one action: --set-default, --capture-frame, or --loopback"
+                .to_string(),
+        ),
+    }
 }
 
 /// Render the CLI usage text.
@@ -100,11 +249,18 @@ pub fn help_text() -> String {
     out.push_str("USAGE:\n");
     out.push_str("  nexkvm [--debug]            Run the desktop daemon\n");
     out.push_str("  nexkvm devices             List trusted (paired) devices\n");
-    out.push_str("  nexkvm pair <uri>          Decode a nexkvm:// pairing bootstrap\n");
+    out.push_str("  nexkvm pair [--accept] <uri> Decode or accept a pairing bootstrap\n");
+    out.push_str("  nexkvm pairing-uri <addr>  Print this device's pairing bootstrap URI\n");
+    out.push_str("  nexkvm permissions         Request/report required macOS permissions\n");
+    out.push_str("  nexkvm portal-smoke       Test Linux Wayland portal grant/barrier/EIS flow\n");
+    out.push_str("  nexkvm pipewire-smoke     Test Linux PipeWire ScreenCast portal/frame flow\n");
+    out.push_str("  nexkvm audio-smoke [--set-default <node>|--capture-frame <node>|--loopback <source> <sink>] Test Linux PipeWire audio graph/stream routing\n");
     out.push_str("  nexkvm doctor              Print local platform/config diagnostics\n");
     out.push_str("  nexkvm protocol            Print protocol compatibility info\n");
     out.push_str("  nexkvm config-path         Print the resolved config path\n");
-    out.push_str("  nexkvm simulate [toml]     Validate a local simulation config\n");
+    out.push_str(
+        "  nexkvm simulate [--simulate-json-only] [toml] Validate a local simulation config\n",
+    );
     out.push_str("\nFLAGS:\n");
     out.push_str("  --debug                   Raise log verbosity to debug\n");
     out
@@ -196,6 +352,17 @@ pub fn format_simulation_report(path: &str, report: &SimulationReport) -> String
     out
 }
 
+/// Render a persisted pairing acceptance.
+#[must_use]
+pub fn format_pairing_accepted(entry: &TrustEntry) -> String {
+    format!(
+        "trusted device accepted\n  name: {}\n  fingerprint: {}\n  paired_at: {}",
+        entry.display_name,
+        entry.public_key.fingerprint(),
+        entry.paired_at,
+    )
+}
+
 /// Render native integration availability for `nexkvm doctor`.
 #[must_use]
 pub fn format_native_integrations(report: &NativeIntegrationReport) -> String {
@@ -206,6 +373,36 @@ pub fn format_native_integrations(report: &NativeIntegrationReport) -> String {
             "  {}: {}",
             entry.integration.label(),
             entry.status.label()
+        );
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
+/// Render macOS input permission details for `nexkvm doctor`.
+#[cfg(any(target_os = "macos", test))]
+#[must_use]
+pub fn format_macos_input_report(
+    accessibility: &str,
+    can_capture_input: bool,
+    can_inject_input: bool,
+    next_step: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "macOS input accessibility: {accessibility}");
+    let _ = writeln!(out, "  capture ready: {can_capture_input}");
+    let _ = writeln!(out, "  inject ready: {can_inject_input}");
+    let _ = writeln!(
+        out,
+        "  settings: System Settings > Privacy & Security > Accessibility"
+    );
+    if let Some(next_step) = next_step {
+        let _ = writeln!(out, "  next step: {next_step}");
+    }
+    if !can_capture_input || !can_inject_input {
+        let _ = writeln!(
+            out,
+            "  after granting permission: restart nexkvm after granting permission"
         );
     }
     out.truncate(out.trim_end().len());
@@ -249,7 +446,36 @@ mod tests {
         assert_eq!(
             parsed.command,
             Command::Pair {
-                uri: "nexkvm://pair/v1/00".into()
+                uri: "nexkvm://pair/v1/00".into(),
+                accept: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pair_accept_flag_is_position_independent() {
+        let before = parse(["pair", "--accept", "nexkvm://pair/v1/00"]).unwrap();
+        let after = parse(["pair", "nexkvm://pair/v1/00", "--accept"]).unwrap();
+        assert_eq!(
+            before.command,
+            Command::Pair {
+                uri: "nexkvm://pair/v1/00".into(),
+                accept: true,
+            }
+        );
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn pairing_uri_requires_one_addr() {
+        assert!(parse(["pairing-uri"]).is_err());
+        assert!(parse(["pairing-uri", "a", "b"]).is_err());
+        assert_eq!(
+            parse(["pairing-uri", "192.168.1.40:47654"])
+                .unwrap()
+                .command,
+            Command::PairingUri {
+                addr: "192.168.1.40:47654".into()
             }
         );
     }
@@ -260,17 +486,128 @@ mod tests {
     }
 
     #[test]
+    fn permissions_command_is_parsed() {
+        assert_eq!(
+            parse(["permissions"]).unwrap().command,
+            Command::Permissions
+        );
+        assert!(help_text().contains("nexkvm permissions"));
+    }
+
+    #[test]
+    fn portal_smoke_command_is_parsed() {
+        assert_eq!(
+            parse(["portal-smoke"]).unwrap().command,
+            Command::PortalSmoke
+        );
+        assert!(help_text().contains("nexkvm portal-smoke"));
+    }
+
+    #[test]
+    fn pipewire_smoke_command_is_parsed() {
+        assert_eq!(
+            parse(["pipewire-smoke"]).unwrap().command,
+            Command::PipeWireSmoke
+        );
+        assert!(parse(["pipewire-smoke", "extra"]).is_err());
+        assert!(help_text().contains("nexkvm pipewire-smoke"));
+    }
+
+    #[test]
+    fn audio_smoke_command_accepts_optional_set_default_target() {
+        assert_eq!(
+            parse(["audio-smoke"]).unwrap().command,
+            Command::AudioSmoke { action: None }
+        );
+        assert_eq!(
+            parse(["audio-smoke", "--set-default", "pipewire-node:41"])
+                .unwrap()
+                .command,
+            Command::AudioSmoke {
+                action: Some(AudioSmokeAction::SetDefault("pipewire-node:41".into()))
+            }
+        );
+        assert_eq!(
+            parse(["audio-smoke", "--capture-frame", "pipewire-node:42"])
+                .unwrap()
+                .command,
+            Command::AudioSmoke {
+                action: Some(AudioSmokeAction::CaptureFrame("pipewire-node:42".into()))
+            }
+        );
+        assert_eq!(
+            parse([
+                "audio-smoke",
+                "--loopback",
+                "pipewire-node:42",
+                "pipewire-node:41"
+            ])
+            .unwrap()
+            .command,
+            Command::AudioSmoke {
+                action: Some(AudioSmokeAction::Loopback {
+                    source: "pipewire-node:42".into(),
+                    sink: "pipewire-node:41".into()
+                })
+            }
+        );
+        assert!(parse(["audio-smoke", "--set-default"]).is_err());
+        assert!(parse(["audio-smoke", "--capture-frame"]).is_err());
+        assert!(parse(["audio-smoke", "--loopback", "pipewire-node:42"]).is_err());
+        assert!(parse(["audio-smoke", "pipewire-node:41"]).is_err());
+        assert!(parse(["audio-smoke", "--set-default", "pipewire-node:41", "extra"]).is_err());
+        assert!(
+            parse([
+                "audio-smoke",
+                "--capture-frame",
+                "pipewire-node:42",
+                "--set-default",
+                "pipewire-node:41"
+            ])
+            .is_err()
+        );
+        assert!(help_text().contains("nexkvm audio-smoke"));
+        assert!(help_text().contains("--capture-frame"));
+        assert!(help_text().contains("--loopback"));
+    }
+
+    #[test]
     fn simulate_takes_optional_path() {
         assert_eq!(
             parse(["simulate"]).unwrap().command,
-            Command::Simulate { path: None }
+            Command::Simulate {
+                path: None,
+                json_only: false,
+            }
         );
         assert_eq!(
             parse(["simulate", "a.toml"]).unwrap().command,
             Command::Simulate {
-                path: Some("a.toml".into())
+                path: Some("a.toml".into()),
+                json_only: false,
             }
         );
+    }
+
+    #[test]
+    fn simulate_json_only_flag_is_supported() {
+        assert_eq!(
+            parse(["simulate", "--simulate-json-only"]).unwrap().command,
+            Command::Simulate {
+                path: None,
+                json_only: true,
+            }
+        );
+        assert_eq!(
+            parse(["simulate", "--json-only", "a.toml"])
+                .unwrap()
+                .command,
+            Command::Simulate {
+                path: Some("a.toml".into()),
+                json_only: true,
+            }
+        );
+        assert!(parse(["simulate", "a.toml", "b.toml"]).is_err());
     }
 
     #[test]
@@ -345,6 +682,18 @@ mod tests {
     }
 
     #[test]
+    fn pairing_acceptance_summary_shows_persisted_entry() {
+        let entry = entry("studio-mac", &[7, 7, 7, 7], 1_700_000_000);
+        let rendered = format_pairing_accepted(&entry);
+        assert!(rendered.contains("trusted device accepted"));
+        assert!(rendered.contains("studio-mac"));
+        assert!(rendered.contains(&entry.public_key.fingerprint()));
+        assert!(
+            rendered.contains("paired_at=1700000000") || rendered.contains("paired_at: 1700000000")
+        );
+    }
+
+    #[test]
     fn native_integration_report_is_formatted_for_doctor() {
         use nexkvm_core::{
             NativeIntegration, NativeIntegrationAvailability, NativeIntegrationReport,
@@ -368,5 +717,24 @@ mod tests {
         assert!(rendered.contains("native integrations: MacOs"));
         assert!(rendered.contains("input-capture: permission-required"));
         assert!(rendered.contains("clipboard: unsupported"));
+    }
+
+    #[test]
+    fn macos_input_report_includes_next_step_when_permission_missing() {
+        let rendered = format_macos_input_report(
+            "permission-required",
+            false,
+            false,
+            Some(
+                "Grant Accessibility permission in System Settings > Privacy & Security > Accessibility",
+            ),
+        );
+
+        assert!(rendered.contains("macOS input accessibility: permission-required"));
+        assert!(rendered.contains("capture ready: false"));
+        assert!(rendered.contains("inject ready: false"));
+        assert!(rendered.contains("Grant Accessibility permission"));
+        assert!(rendered.contains("System Settings"));
+        assert!(rendered.contains("restart nexkvm after granting permission"));
     }
 }

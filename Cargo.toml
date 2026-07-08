@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "apps/desktop",
+    "apps/gui",
     "apps/mobile_future",
     "crates/protocol",
     "crates/core",
@@ -55,9 +56,12 @@ anyhow = "1"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+eframe = { version = "0.29", default-features = true }
 
 # Identity / misc
 uuid = { version = "1", features = ["v4", "serde"] }
+ed25519-dalek = "2"
+getrandom = "0.3"
 
 # Hashing (SAS pairing confirmation; audited pure-Rust SHA-256)
 sha2 = "0.10"
@@ -68,6 +72,13 @@ mdns-sd = "0.11"
 
 # Compression (pure-Rust miniz_oxide backend; used for clipboard sync payloads)
 flate2 = "1"
+
+# Clipboard (platform-specific backends)
+clipboard-win = "5"
+arboard = "3"
+zbus = { version = "4.4", default-features = false, features = ["tokio"] }
+zvariant = "4.2"
+reis = { version = "0.7", default-features = false, features = ["tokio"] }
 
 # Internal crates
 nexkvm-protocol = { path = "crates/protocol" }

@@ -9,6 +9,25 @@ ARCHIVE="$DIST/nexkvm-macos-universal-${VERSION}.zip"
 LOGO_PNG="$ROOT/packaging/assets/nexkvm-logo.png"
 ICONSET_DIR="$DIST/nexkvm.iconset"
 ICNS_OUT="$APP_DIR/Contents/Resources/nexkvm.icns"
+ENTITLEMENTS="$ROOT/packaging/macos/nexkvm.entitlements"
+RELEASE="${NEXKVM_RELEASE:-0}"
+
+if [[ "$RELEASE" == "1" ]]; then
+  if [[ -z "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
+    echo "NEXKVM_RELEASE=1 requires APPLE_CODESIGN_IDENTITY."
+    echo "Find a Developer ID Application identity with:"
+    echo "  security find-identity -p codesigning -v"
+    echo "Then rerun with:"
+    echo "  APPLE_CODESIGN_IDENTITY='Developer ID Application: ...' NEXKVM_RELEASE=1 ./scripts/package-macos.sh"
+    exit 1
+  fi
+  if [[ -z "${APPLE_NOTARY_PROFILE:-}" ]]; then
+    echo "NEXKVM_RELEASE=1 requires APPLE_NOTARY_PROFILE."
+    echo "Create or verify a notarytool keychain profile, then rerun with:"
+    echo "  APPLE_NOTARY_PROFILE='<profile-name>' NEXKVM_RELEASE=1 ./scripts/package-macos.sh"
+    exit 1
+  fi
+fi
 
 mkdir -p "$DIST"
 
@@ -39,9 +58,11 @@ rm -rf "$ICONSET_DIR"
 
 if [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
   echo "Signing app bundle with identity: $APPLE_CODESIGN_IDENTITY"
-  codesign --force --deep --timestamp --options runtime --sign "$APPLE_CODESIGN_IDENTITY" "$APP_DIR"
+  codesign --force --deep --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_CODESIGN_IDENTITY" "$APP_DIR"
 else
-  echo "APPLE_CODESIGN_IDENTITY not set; building unsigned bundle"
+  echo "APPLE_CODESIGN_IDENTITY not set; signing app bundle ad-hoc for local development."
+  codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" --sign - "$APP_DIR"
+  echo "Ad-hoc signed bundles are for local development only and may trigger Gatekeeper warnings."
 fi
 
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE"
@@ -55,5 +76,14 @@ if [[ -n "${APPLE_NOTARY_PROFILE:-}" ]]; then
   /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ARCHIVE"
   echo "Notarized archive ready: $ARCHIVE"
 else
-  echo "APPLE_NOTARY_PROFILE not set; skipping notarization"
+  echo "APPLE_NOTARY_PROFILE not set; skipping notarization."
+  echo "Notarization is required for a public macOS release that opens without Gatekeeper friction."
+fi
+
+if [[ "$RELEASE" == "1" ]]; then
+  echo "Validating signed and notarized app..."
+  codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+  codesign -dvvv --entitlements :- "$APP_DIR"
+  xcrun stapler validate "$APP_DIR"
+  spctl -a -vv "$APP_DIR"
 fi

@@ -1,20 +1,27 @@
 //! Windows injection mapping: [`InjectionCommand`] → `SendInput` plan.
 //!
-//! The real backend builds `INPUT` structures and calls `SendInput` (Win32). It
-//! is gated by User Interface Privilege Isolation (UIPI): injection into windows
-//! owned by higher-integrity processes is silently dropped, which nexkvm surfaces
-//! via capabilities rather than failing blindly. That FFI lands in a later phase;
-//! this module is the pure, testable translation it consumes — turning a neutral
-//! command into the `INPUT` kind + `dwFlags` + payload, with no `unsafe` and no
-//! Win32 dependency.
+//! The backend builds `INPUT` structures and calls `SendInput` (Win32). It is
+//! gated by User Interface Privilege Isolation (UIPI): injection into windows
+//! owned by higher-integrity processes can be silently dropped by Windows, so
+//! nexkvm keeps the translation testable and returns backend errors for cases it
+//! cannot inject.
 //!
 //! # Keycode caveat
 //! [`InjectionCommand::Key`] carries a USB HID usage id. Windows keyboard input
-//! uses virtual-key codes or hardware scancodes. The FFI layer maps HID →
-//! scancode and sets `KEYEVENTF_SCANCODE`; this module passes the keycode
-//! through and records the up/down flag so the table applies at one seam.
+//! uses virtual-key codes or hardware scancodes. This module maps HID →
+//! scancode and sets `KEYEVENTF_SCANCODE`.
 
-use nexkvm_input::{InjectionCommand, MouseButton};
+#![allow(unsafe_code)]
+
+use async_trait::async_trait;
+use std::fmt;
+use std::mem::size_of;
+use std::sync::Arc;
+
+use nexkvm_input::{InjectionCommand, InputError, InputEvent, InputInjector, MouseButton};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, MOUSEINPUT, SendInput,
+};
 
 /// `MOUSEEVENTF_*` flags.
 pub mod mouse_flag {
@@ -108,6 +115,72 @@ pub enum SendInputPlan {
     },
 }
 
+trait InputSender: Send + Sync {
+    fn send(&self, plan: SendInputPlan) -> Result<(), InputError>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct NativeInputSender;
+
+impl InputSender for NativeInputSender {
+    fn send(&self, plan: SendInputPlan) -> Result<(), InputError> {
+        send_input_plan(plan)
+    }
+}
+
+/// Windows input injector backed by Win32 `SendInput`.
+#[derive(Clone)]
+pub struct WindowsInputInjector {
+    sender: Arc<dyn InputSender>,
+}
+
+impl WindowsInputInjector {
+    /// Create an injector backed by native Win32 `SendInput`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            sender: Arc::new(NativeInputSender),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_sender(sender: Arc<dyn InputSender>) -> Self {
+        Self { sender }
+    }
+}
+
+impl Default for WindowsInputInjector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for WindowsInputInjector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowsInputInjector")
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl InputInjector for WindowsInputInjector {
+    async fn inject(&self, event: InputEvent) -> Result<(), InputError> {
+        let command = event.to_injection_command();
+        let plan = plan(command);
+        validate_supported(plan)?;
+        self.sender.send(plan)
+    }
+}
+
+fn validate_supported(plan: SendInputPlan) -> Result<(), InputError> {
+    match plan {
+        SendInputPlan::Key { keycode, .. } if hid_to_scancode(keycode).is_none() => Err(
+            InputError::Backend(format!("unsupported Windows HID keycode: {keycode}")),
+        ),
+        _ => Ok(()),
+    }
+}
+
 fn button_flag(button: MouseButton, pressed: bool) -> u32 {
     match (button, pressed) {
         (MouseButton::Left, true) => mouse_flag::LEFTDOWN,
@@ -166,6 +239,105 @@ pub fn plan(command: InjectionCommand) -> SendInputPlan {
                 key_flag::SCANCODE | key_flag::KEYUP
             },
         },
+    }
+}
+
+fn send_input_plan(plan: SendInputPlan) -> Result<(), InputError> {
+    let input = input_from_plan(plan)?;
+    // SAFETY: `input` is a valid Win32 INPUT structure initialized by
+    // `input_from_plan`; the slice length is one and cbSize matches INPUT.
+    let sent = unsafe { SendInput(1, &input, size_of::<INPUT>() as i32) };
+    if sent == 1 {
+        Ok(())
+    } else {
+        Err(InputError::Backend(
+            "SendInput did not inject the requested event".into(),
+        ))
+    }
+}
+
+fn input_from_plan(plan: SendInputPlan) -> Result<INPUT, InputError> {
+    match plan {
+        SendInputPlan::MouseMoveAbsolute { x, y, flags } => Ok(mouse_input(x, y, 0, flags)),
+        SendInputPlan::MouseMoveRelative { .. } => Err(InputError::Backend(
+            "Windows relative screen-fraction movement is not wired yet".into(),
+        )),
+        SendInputPlan::MouseMoveRaw { dx, dy, flags } => Ok(mouse_input(dx, dy, 0, flags)),
+        SendInputPlan::MouseButton { flags } => Ok(mouse_input(0, 0, 0, flags)),
+        SendInputPlan::MouseScroll { flags, amount } => Ok(mouse_input(0, 0, amount, flags)),
+        SendInputPlan::Key { keycode, flags } => {
+            let Some(scan) = hid_to_scancode(keycode) else {
+                return Err(InputError::Backend(format!(
+                    "unsupported Windows HID keycode: {keycode}"
+                )));
+            };
+            Ok(keyboard_input(scan, flags))
+        }
+    }
+}
+
+fn mouse_input(dx: i32, dy: i32, mouse_data: i32, flags: u32) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx,
+                dy,
+                mouseData: mouse_data as u32,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn keyboard_input(scan: u16, flags: u32) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: 0,
+                wScan: scan,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn hid_to_scancode(keycode: u32) -> Option<u16> {
+    match keycode {
+        0x04 => Some(0x1e), // A
+        0x05 => Some(0x30), // B
+        0x06 => Some(0x2e), // C
+        0x07 => Some(0x20), // D
+        0x08 => Some(0x12), // E
+        0x09 => Some(0x21), // F
+        0x0A => Some(0x22), // G
+        0x0B => Some(0x23), // H
+        0x0C => Some(0x17), // I
+        0x0D => Some(0x24), // J
+        0x0E => Some(0x25), // K
+        0x0F => Some(0x26), // L
+        0x10 => Some(0x32), // M
+        0x11 => Some(0x31), // N
+        0x12 => Some(0x18), // O
+        0x13 => Some(0x19), // P
+        0x14 => Some(0x10), // Q
+        0x15 => Some(0x13), // R
+        0x16 => Some(0x1f), // S
+        0x17 => Some(0x14), // T
+        0x18 => Some(0x16), // U
+        0x19 => Some(0x2f), // V
+        0x1A => Some(0x11), // W
+        0x1B => Some(0x2d), // X
+        0x1C => Some(0x15), // Y
+        0x1D => Some(0x2c), // Z
+        0x29 => Some(0x01), // Escape
+        0x2C => Some(0x39), // Space
+        _ => None,
     }
 }
 
@@ -230,5 +402,61 @@ mod tests {
                 flags: key_flag::SCANCODE | key_flag::KEYUP,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn injector_sends_supported_events() {
+        let sender = std::sync::Arc::new(RecordingSender::default());
+        let injector = WindowsInputInjector::with_sender(sender.clone());
+
+        injector.inject(InputEvent::KeyPress(0x04)).await.unwrap();
+        injector
+            .inject(InputEvent::ButtonPress(MouseButton::Left))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            sender.plans(),
+            vec![
+                SendInputPlan::Key {
+                    keycode: 0x04,
+                    flags: key_flag::SCANCODE
+                },
+                SendInputPlan::MouseButton {
+                    flags: mouse_flag::LEFTDOWN
+                }
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn injector_rejects_unsupported_keycode() {
+        let sender = std::sync::Arc::new(RecordingSender::default());
+        let injector = WindowsInputInjector::with_sender(sender);
+
+        let error = injector
+            .inject(InputEvent::KeyPress(0xff))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, InputError::Backend(_)));
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingSender {
+        plans: std::sync::Mutex<Vec<SendInputPlan>>,
+    }
+
+    impl RecordingSender {
+        fn plans(&self) -> Vec<SendInputPlan> {
+            self.plans.lock().unwrap().clone()
+        }
+    }
+
+    impl InputSender for RecordingSender {
+        fn send(&self, plan: SendInputPlan) -> Result<(), InputError> {
+            self.plans.lock().unwrap().push(plan);
+            Ok(())
+        }
     }
 }

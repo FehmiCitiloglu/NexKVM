@@ -133,6 +133,16 @@ impl MouseShareController {
         }
     }
 
+    /// Force remote focus back to the local device.
+    ///
+    /// Returns `true` when this call actually released a remote focus.
+    pub fn release_remote(&mut self) -> bool {
+        let was_remote = matches!(self.focus, CursorFocus::Remote { .. });
+        self.focus = CursorFocus::Local;
+        self.virtual_pos = (0.0, 0.0);
+        was_remote
+    }
+
     /// Replace the edge links (e.g. after the device topology changes).
     pub fn set_links(&mut self, links: Vec<crate::boundary::EdgeLink>) {
         self.boundary.set_links(links);
@@ -345,5 +355,20 @@ mod tests {
     fn remote_motion_ignored_while_local() {
         let mut ctrl = controller(vec![]);
         assert_eq!(ctrl.on_remote_motion(0.5, 0.5), ShareOutput::Idle);
+    }
+
+    #[test]
+    fn release_remote_returns_focus_to_local() {
+        let peer = DeviceId::generate();
+        let mut ctrl = controller(vec![EdgeLink {
+            edge: Edge::Right,
+            peer,
+        }]);
+        ctrl.on_local_cursor(1920, 540);
+
+        assert!(ctrl.release_remote());
+        assert_eq!(ctrl.focus(), CursorFocus::Local);
+        assert_eq!(ctrl.active_peer(), None);
+        assert!(!ctrl.release_remote());
     }
 }

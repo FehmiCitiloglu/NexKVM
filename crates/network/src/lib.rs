@@ -38,6 +38,7 @@
 //! - [`browser`] — browser remote-session ticket planning.
 
 mod error;
+mod secure;
 mod selector;
 mod transport;
 
@@ -99,6 +100,10 @@ pub use remote_session::{
     answer_offer,
 };
 pub use retry::Backoff;
+pub use secure::{
+    SecureConnection, establish_trusted_session, trusted_peer_session_security,
+    trusted_session_transcript,
+};
 pub use selector::TransportSelector;
 pub use session::{Session, SessionToken};
 pub use transport::{Connection, Transport, TransportKind};

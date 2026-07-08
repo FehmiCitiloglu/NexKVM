@@ -29,6 +29,13 @@ planned.
   crypto, network, discovery, input, clipboard, streaming, plugins, storage,
   telemetry, and platform crates.
 - [x] Desktop daemon crate and developer CLI entrypoint.
+- [x] Cross-platform native GUI control panel crate for configuration, daemon
+  control, diagnostics, permissions, pairing, and input handoff settings.
+- [x] GUI-managed daemon start preflight that detects a busy listen port, stops
+  a stale local `nexkvm` daemon process, and refuses startup if the port remains
+  occupied.
+- [x] GUI notification center for daemon lifecycle, configuration, command,
+  permission, and pairing status events.
 - [x] Future mobile companion placeholder crate for Android and iOS targets.
 - [x] Platform-specific crate boundaries for macOS, Linux, and Windows.
 
@@ -39,6 +46,12 @@ planned.
 - [x] `nexkvm config-path` command.
 - [x] `nexkvm devices` trusted-device listing command.
 - [x] `nexkvm pair <uri>` pairing bootstrap decode and fingerprint display.
+- [x] `nexkvm pair --accept <uri>` trust-store write path after user-confirmed
+  pairing bootstrap.
+- [x] `nexkvm pairing-uri <addr>` command for generating a testable pairing
+  bootstrap URI.
+- [x] `nexkvm permissions` command for prompting/reporting required macOS
+  input permissions.
 - [x] `nexkvm simulate [toml]` basic simulation-file summary.
 - [x] `--debug` flag for raising daemon log verbosity.
 - [x] Daemon startup wiring for config loading, telemetry, device identity,
@@ -46,6 +59,15 @@ planned.
 - [x] UDP LAN discovery startup in daemon mode.
 - [x] Trusted-peer rediscovery logging through discovery service.
 - [x] Trusted-peer rediscovery to cross-platform TCP connection driver.
+- [x] Explicit peer address launch profile for GUI-managed startup when LAN
+  discovery is not enough or a specific target should be dialed.
+- [x] Input sharing runtime configuration for disabled, source, target, and
+  both roles.
+- [x] Barrier-inspired linked-screen input controller in the daemon forwarding
+  path, reusing the pure topology/boundary state machine for edge handoff.
+- [x] Source-side local input suppression while remote focus is active on macOS
+  and Windows, with emergency key and timeout release still wired through the
+  shared router.
 
 ### Protocol
 
@@ -67,9 +89,14 @@ planned.
 - [x] File-backed trust store.
 - [x] Trust-store write path after confirmed pairing with code verification and
   flush confirmation.
+- [x] User-confirmed pairing bootstrap acceptance into the persisted trust
+  store.
+- [x] File-backed local private device identity seed fallback.
 - [x] Session security trait boundary.
 - [x] ChaCha20-Poly1305 AEAD session security implementation.
 - [x] Monotonic message ID and nonce-based replay-protection model.
+- [x] Trusted-peer key announcement handshake for pinned peers.
+- [x] Ed25519 private-key proof-of-possession for trusted session handshake.
 - [x] Pairing-flow integration test.
 
 ### Discovery
@@ -91,9 +118,17 @@ planned.
 - [x] Transport selector.
 - [x] TCP transport backend.
 - [x] Desktop daemon TCP listener and inbound connection accept loop.
+- [x] Testable input envelope codec and connection routing helpers over peer
+  connections.
 - [x] QUIC feature-gated backend surface.
 - [x] WebRTC feature-gated remote-mode planning surface.
 - [x] Wire codec between protocol envelopes and bytes.
+- [x] App-layer secure connection wrapper that seals/opens envelope bodies over
+  any transport connection.
+- [x] Replay/authentication rejection covered in the concrete secure receive
+  path.
+- [x] Daemon inbound/outbound TCP peer connections are wrapped in app-layer
+  session security after trusted-peer signed key handshake.
 - [x] Resumable in-process session model.
 - [x] Heartbeat and liveness monitor.
 - [x] RTT and jitter tracker.
@@ -216,6 +251,8 @@ planned.
 - [x] Release workflow definition.
 - [x] Linux desktop file and package metadata.
 - [x] macOS bundle metadata.
+- [x] macOS release packaging validation scaffolding for Developer ID signing,
+  hardened runtime, notarization, stapling, and Gatekeeper checks.
 - [x] Windows NSIS installer script.
 - [x] Package helper scripts.
 
@@ -233,6 +270,17 @@ planned.
 
 - [x] macOS platform backend skeleton.
 - [x] macOS Accessibility permission prompt and capability refresh.
+- [x] macOS keyboard/mouse permission diagnostics in `doctor`.
+- [x] macOS first-run permission guidance with System Settings path and restart
+  instruction.
+- [x] macOS input capture and injection permission-gated runtime boundaries.
+- [x] macOS CGEventTap input capture loop for pointer, buttons, scroll, and
+  MVP keyboard keys.
+- [x] Edge-based extended-screen input handoff that keeps input local until the
+  configured edge is crossed.
+- [x] macOS source-side input suppression while remote focus is active.
+- [x] macOS native input injection posting for absolute pointer, buttons,
+  scroll, and MVP keyboard keys.
 - [x] Windows platform backend skeleton.
 - [x] Linux platform backend with session, desktop, portal, PipeWire, X11, and
   handheld capability analysis.
@@ -241,23 +289,78 @@ planned.
 - [x] macOS injection translation helper model.
 - [x] Linux injection translation helper model.
 - [x] Windows injection translation helper model.
+- [x] Windows low-level hook input capture loop for pointer, buttons, scroll,
+  and MVP keyboard keys.
+- [x] Windows native input injection via `SendInput` for pointer, buttons,
+  scroll, and MVP keyboard keys.
 
 ## Planned Features
 
 ### Native Platform Integrations
 
-- [ ] macOS input capture via native APIs.
-- [ ] macOS input injection via native APIs.
-- [ ] macOS clipboard backend using `NSPasteboard`.
-- [ ] macOS screen capture using Screen Recording APIs.
-- [ ] macOS media encoding through VideoToolbox.
-- [ ] Linux Wayland portal-mediated input capture and injection.
-- [ ] Linux PipeWire screen capture.
-- [ ] Linux PipeWire audio routing backend.
+- [x] macOS clipboard backend (MVP text read/write via pbpaste/pbcopy; daemon runtime integration complete; encode/decode transport layer complete; remote updates applied via Clipboard::write(); multi-format NSPasteboard FFI support for text, HTML, RTF, and images implemented).
+- [x] Windows clipboard backend (MVP text read/write via native Clipboard API; UTF-8 encoding; daemon runtime integration complete; supports CF_UNICODETEXT, CF_DIB, CF_HDROP format mapping).
+- [x] Linux clipboard backend (MVP text read/write via arboard; unified X11/Wayland support; daemon runtime integration complete).
+- [x] macOS screen capture using CoreGraphics CGDisplayCreateImage and window capture paths (MVP synchronous frame capture for display/window/application sources; display enumeration via NSScreen FFI; Window/Application source enumeration via CGWindowListCopyWindowInfo; ScreenCaptureBackend trait impl with ScreenCaptureKit availability gating, screen-recording permission request integration, source listing, and monotonic frame sequence numbering; BGRA8 pixel format with System memory backend; spawn_blocking async integration; 2 unit tests passing).
+- [x] macOS media encoding through VideoToolbox (`MacosVideoToolboxEncoder`
+  wraps BGRA/RGBA system-memory frames in CoreVideo pixel buffers, encodes
+  H.264/H.265 through `VTCompressionSession`, and returns stream-ready encoded
+  payloads).
+- [~] Linux Wayland portal-mediated input capture and injection (daemon-facing
+  portal session boundary, grant gating, capture/injection traits, and concrete
+  zbus xdg-desktop-portal RemoteDesktop/InputCapture transport are implemented;
+  InputCapture pointer-barrier lifecycle is modeled through `GetZones`,
+  `SetPointerBarriers`, and `Enable`; `ConnectToEIS` fd is retained for an EIS
+  decoder backend; Request response parsing is wired for zone sets and rejected
+  barriers; `ReisPortalEisEventDecoder` opens the portal fd as a receiver
+  context and maps pointer, scroll, button, and keyboard EIS events to NexKVM
+  input events; `nexkvm portal-smoke` exercises the grant, first-zone right-edge
+  barrier, and EIS event path on real Linux Wayland sessions).
+- [~] Linux PipeWire screen capture (xdg-desktop-portal `ScreenCast` transport
+  is wired through `CreateSession`, `SelectSources`, `Start`, and
+  `OpenPipeWireRemote`; portal stream metadata and the PipeWire remote fd are
+  retained; `LinuxPipeWireScreenCapture` implements `ScreenCaptureBackend`
+  capability reporting, permission grant flow, and display/window source
+  listing; `pipewire-serial`/portal/node stream targeting and raw PipeWire frame
+  validation into `ScreenFrame` are implemented behind a `PipeWireFrameReader`
+  boundary; Linux-only native `pw_context_connect_fd` + `pw_stream_new` /
+  `pw_stream_connect` pump is present with `target.object`, bounded loop
+  iteration, process callback, `pw_stream_dequeue_buffer` /
+  `pw_stream_queue_buffer`, SPA chunk extraction, mapped System payload copy,
+  and DMA-BUF handle payload shaping; raw format model/fixation covers
+  BGRA/RGBA/NV12, stride and expected system payload sizing are tracked, and
+  native `param_changed` is hooked into deterministic NexKVM format fixation;
+  parsed `spa_video_info_raw` format/size/stride mapping is modeled for
+  RGBA/RGBx/BGRA/BGRx/NV12; incoming `SPA_PARAM_Format` object pods are walked
+  in Rust to extract media type/subtype, raw video format, and frame size into
+  `PipeWireSpaRawVideoInfo`; `nexkvm pipewire-smoke` exercises ScreenCast portal
+  grant, source listing, remote fd/native reader setup, format negotiation, and
+  first-frame capture on real Linux Wayland sessions).
+- [~] Linux PipeWire audio routing backend (PipeWire audio graph node metadata is
+  mapped into the shared `AudioBackend` model; `Audio/Sink`, `Audio/Source`, and
+  `Audio/Duplex` nodes become playback/capture/duplex `AudioDevice`s with
+  default endpoint reporting; playback switch requests validate
+  `pipewire-node:<id>` targets behind a graph boundary; Linux-only native graph
+  enumeration connects to the user PipeWire core, listens to registry
+  `global`/`global_remove` events, parses SPA dict properties, and feeds the
+  shared graph snapshot; default playback mutation is wired through
+  WirePlumber's `wpctl set-default <node-id>` command path; `nexkvm
+  audio-smoke` enumerates the live user PipeWire audio graph, can exercise
+  playback default switching with `--set-default pipewire-node:<id>`, capture
+  one native stream frame with `--capture-frame pipewire-node:<id>`, and route
+  one capture frame into playback with `--loopback <source> <sink>`; shared
+  `AudioStreamBackend` frame capture/playback routing is modeled and
+  `PipeWireAudioBackend` can route frames through a PipeWire stream adapter
+  boundary; native Linux `pw_stream` capture/playback wiring is present with
+  user-session core connection, `target.object` stream properties, process
+  callback dequeue/queue, mapped PCM chunk-to-`AudioFrame` capture, and mapped
+  playback buffer writes; native stream diagnostics force PCM and carry
+  rate/channel/sample-format/codec metadata in PipeWire stream properties;
+  `SPA_PARAM_Format` callbacks parse negotiated raw audio sample
+  format/rate/channel values into the active stream format; live Linux runtime
+  validation plus full PipeWire audio format pod proposal/builder negotiation
+  are pending).
 - [ ] Linux X11 input and clipboard fallback implementation.
-- [ ] Windows input capture via Raw Input or low-level hooks.
-- [ ] Windows input injection via `SendInput`.
-- [ ] Windows clipboard backend.
 - [ ] Windows screen capture via Graphics Capture or Desktop Duplication.
 - [ ] Windows audio routing via WASAPI.
 
@@ -265,10 +368,10 @@ planned.
 
 - [ ] Real network dial on trusted peer rediscovery.
 - [ ] Cryptographic proof-of-key ownership for trusted reconnects.
+- [ ] Private-key-backed device identity in OS keychain.
+- [ ] Fully authenticated reconnect path for trusted devices.
 - [ ] TCP transport hardened with TLS.
 - [ ] QUIC transport fully wired as preferred LAN path.
-- [ ] App-layer session security wired into all transport traffic.
-- [ ] Replay rejection enforced in concrete receive paths.
 - [ ] WebRTC NAT traversal for remote mode.
 - [ ] STUN/TURN configuration and remote signaling flow.
 - [ ] Self-hosted relay server integration.
@@ -295,7 +398,9 @@ planned.
 - [ ] Shared cursor collaboration.
 - [ ] Pair programming collaborative control flow.
 - [ ] Remote teaching/control leases with revocation UI.
-- [ ] Cross-device notifications surfaced in UI.
+- [~] Cross-device notifications surfaced in UI (GUI notification center exists
+  for local runtime events; trusted-peer notification ingestion remains
+  planned).
 - [ ] Quick command palette UI.
 - [ ] Automation scripting runtime.
 
@@ -333,8 +438,14 @@ planned.
 
 ### Simulation And Developer Experience
 
-- [ ] Simulation reconnect-candidate planning.
-- [ ] Feed simulation data into discovery, latency, workspace, screen, and
+- [x] Typed TOML parsing for `nexkvm simulate`.
+- [x] Simulation validation for empty, duplicated, malformed, or unknown devices.
+- [x] Simulation output with device ID, display name, OS, address, and trust
+  state.
+- [x] Simulation connection planning for direct LAN, reconnect candidate,
+  missing trust, and invalid configuration.
+- [x] Stable integration test for simulation report output.
+- [x] Feed simulation data into discovery, latency, workspace, screen, and
   collaboration simulators.
 
 ### Release Readiness
