@@ -306,7 +306,13 @@ where
             )
             .await
             {
-                Ok(event) => event?,
+                Ok(Ok(event)) => event,
+                Ok(Err(error)) => {
+                    if share.release_remote() {
+                        set_suppressed(false);
+                    }
+                    return Err(error.into());
+                }
                 Err(_) => {
                     if share.release_remote() {
                         set_suppressed(false);
@@ -317,7 +323,9 @@ where
         } else {
             capture.next_event().await?
         };
-        if matches!(event, InputEvent::KeyPress(keycode) if keycode == emergency_stop_keycode) {
+        if share.is_remote()
+            && matches!(event, InputEvent::KeyPress(keycode) if keycode == emergency_stop_keycode)
+        {
             if share.release_remote() {
                 set_suppressed(false);
             }
@@ -330,7 +338,12 @@ where
             set_suppressed(is_remote);
         }
         if let Some(event) = routed {
-            connection.send(encode_input_event(next_id, event)).await?;
+            if let Err(error) = connection.send(encode_input_event(next_id, event)).await {
+                if share.release_remote() {
+                    set_suppressed(false);
+                }
+                return Err(error.into());
+            }
             next_id = next_id.next();
         }
     }
@@ -663,6 +676,35 @@ mod tests {
         recv: Mutex<VecDeque<Envelope>>,
     }
 
+    #[derive(Debug, Default)]
+    struct FailingSendConnection {
+        sent: Mutex<Vec<Envelope>>,
+    }
+
+    #[async_trait]
+    impl Connection for FailingSendConnection {
+        fn kind(&self) -> TransportKind {
+            TransportKind::Tcp
+        }
+
+        fn peer_addr(&self) -> SocketAddr {
+            "127.0.0.1:47654".parse().unwrap()
+        }
+
+        async fn send(&self, envelope: Envelope) -> Result<(), NetworkError> {
+            self.sent.lock().unwrap().push(envelope);
+            Err(NetworkError::Closed)
+        }
+
+        async fn recv(&self) -> Result<Envelope, NetworkError> {
+            Err(NetworkError::Closed)
+        }
+
+        async fn close(&self) -> Result<(), NetworkError> {
+            Ok(())
+        }
+    }
+
     impl MemoryConnection {
         fn with_recv(envelopes: Vec<Envelope>) -> Self {
             Self {
@@ -746,9 +788,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emergency_key_stops_forwarding_without_sending_event() {
+    async fn local_emergency_key_before_handoff_does_not_stop_forwarding() {
         let capture = QueueCapture::new(vec![InputEvent::KeyPress(41)]);
         let connection = Arc::new(MemoryConnection::default());
+        let suppressions = Arc::new(Mutex::new(Vec::new()));
+        let suppressions_for_callback = Arc::clone(&suppressions);
 
         let error = forward_extended_until_error(
             &capture,
@@ -757,13 +801,70 @@ mod tests {
             HandoffEdge::Right,
             41,
             3_000,
-            |_| {},
+            move |suppressed| suppressions_for_callback.lock().unwrap().push(suppressed),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, InputSessionError::Codec(_)));
+        assert!(connection.sent.lock().unwrap().is_empty());
+        assert!(suppressions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn emergency_key_stops_remote_forwarding_without_sending_key() {
+        let capture = QueueCapture::new(vec![
+            InputEvent::PointerMove { x: 1.0, y: 0.5 },
+            InputEvent::KeyPress(41),
+        ]);
+        let connection = Arc::new(MemoryConnection::default());
+        let suppressions = Arc::new(Mutex::new(Vec::new()));
+        let suppressions_for_callback = Arc::clone(&suppressions);
+
+        let error = forward_extended_until_error(
+            &capture,
+            &*connection,
+            MessageId(30),
+            HandoffEdge::Right,
+            41,
+            3_000,
+            move |suppressed| suppressions_for_callback.lock().unwrap().push(suppressed),
         )
         .await
         .unwrap_err();
 
         assert!(matches!(error, InputSessionError::EmergencyStop));
-        assert!(connection.sent.lock().unwrap().is_empty());
+        let sent = connection.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            decode_input_event(sent[0].clone()).unwrap(),
+            InputEvent::PointerMove { x: 0.0, y: 0.5 }
+        );
+        assert_eq!(suppressions.lock().unwrap().as_slice(), &[true, false]);
+    }
+
+    #[tokio::test]
+    async fn send_failure_releases_remote_suppression() {
+        let capture = QueueCapture::new(vec![InputEvent::PointerMove { x: 1.0, y: 0.5 }]);
+        let connection = Arc::new(FailingSendConnection::default());
+        let suppressions = Arc::new(Mutex::new(Vec::new()));
+        let suppressions_for_callback = Arc::clone(&suppressions);
+
+        let error = forward_extended_until_error(
+            &capture,
+            &*connection,
+            MessageId(70),
+            HandoffEdge::Right,
+            41,
+            3_000,
+            move |suppressed| suppressions_for_callback.lock().unwrap().push(suppressed),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, InputSessionError::Codec(_)));
+        assert_eq!(connection.sent.lock().unwrap().len(), 1);
+        assert_eq!(suppressions.lock().unwrap().as_slice(), &[true, false]);
     }
 
     #[tokio::test]
