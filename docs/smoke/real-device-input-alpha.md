@@ -15,8 +15,8 @@ to `[x]` only when every required row for that item is `pass`.
 
 | Role | Device | OS | NexKVM build | Address |
 | --- | --- | --- | --- | --- |
-| Source | source-mac | macOS | local release build | SOURCE_IP:47654 |
-| Target | target-windows | Windows | local release build | TARGET_IP:47654 |
+| Source | nexkvm (macOS) | macOS | local release build | 192.168.1.41:47654 |
+| Target | nexkvm (Windows) | Windows | local release build | 192.168.1.27:47654 |
 
 ## Build
 
@@ -84,13 +84,13 @@ Set the source config to:
 ```toml
 [network]
 listen_port = 47654
-connect_addr = "TARGET_IP:47654"
+connect_addr = "192.168.1.27:47654"
 enable_discovery = true
 transports = ["tcp"]
 
 [input]
 control_role = "source"
-active_peer = "target-windows"
+active_peer = "nexkvm (Windows)"
 handoff_edge = "right"
 emergency_stop_keycode = 41
 remote_focus_timeout_millis = 3000
@@ -113,7 +113,7 @@ transports = ["tcp"]
 
 [input]
 control_role = "target"
-active_peer = "source-mac"
+active_peer = "nexkvm (macOS)"
 handoff_edge = "left"
 emergency_stop_keycode = 41
 remote_focus_timeout_millis = 3000
@@ -155,6 +155,15 @@ Windows has no macOS-style Accessibility prompt. Expected `doctor` results:
 Do not run the Windows target elevated unless the application receiving input
 is also elevated. Windows UIPI can prevent a normal NexKVM process from
 injecting into a higher-integrity application.
+
+Preflight evidence recorded on 2026-07-14:
+
+- macOS host-context `doctor`: Accessibility ready, capture ready, and inject
+  ready.
+- Windows `doctor`: input capture and input injection available.
+- Pairing acceptance: Windows accepted fingerprint
+  `01:d3:54:e8:ab:b5:70:04`; macOS accepted and persisted fingerprint
+  `65:62:a6:62:7d:b2:e6:16`.
 
 ## Runtime Checks
 
