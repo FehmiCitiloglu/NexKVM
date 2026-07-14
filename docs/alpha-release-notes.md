@@ -5,7 +5,8 @@ desktop peers over a LAN connection.
 
 ## Included In The Alpha
 
-- macOS real-device keyboard and mouse sharing when the smoke record passes.
+- Mac-to-Windows real-device keyboard and mouse sharing when the smoke record
+  passes, with macOS as the input source and Windows as the target.
 - Pairing through `nexkvm pairing-uri` and `nexkvm pair --accept`.
 - Explicit TCP peer connection through `network.connect_addr`.
 - Edge-based pointer handoff.
@@ -23,7 +24,8 @@ desktop peers over a LAN connection.
 - Screen streaming, hover previews, audio routing, file transfer, mobile
   companion apps, WebRTC remote mode, relay mode, cloud sync, and plugin
   marketplace support are outside this alpha.
-- Windows input smoke evidence is optional for this alpha.
+- The reverse Windows-to-Mac input direction is not covered by the initial
+  alpha smoke record.
 - Linux input is capability-limited unless a real Wayland portal smoke passes.
 - Signed installers, SBOM, checksums, and every-OS smoke evidence remain
   production release gates.
