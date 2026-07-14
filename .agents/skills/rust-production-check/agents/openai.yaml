@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rust Production Check"
+  short_description: "Verify Rust changes are production-ready"
+  default_prompt: "Use $rust-production-check to inspect and verify this Rust change before completion."

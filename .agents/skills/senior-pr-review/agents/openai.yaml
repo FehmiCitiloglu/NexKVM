@@ -1,0 +1,4 @@
+interface:
+  display_name: "Senior PR Review"
+  short_description: "Evidence-driven senior code review"
+  default_prompt: "Use $senior-pr-review to review these changes for concrete production risks."
