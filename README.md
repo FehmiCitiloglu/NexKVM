@@ -39,6 +39,18 @@ cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 
 Running `cargo run -p nexkvm` with no subcommand starts the desktop daemon and waits for shutdown.
 
+To build optimized binaries for the current computer and install both the
+daemon/CLI and graphical control panel into Cargo's bin directory (normally
+`~/.cargo/bin`):
+
+```sh
+cargo install --path apps/desktop --locked && cargo install --path apps/gui --locked
+```
+
+Workspace library crates are compiled automatically as dependencies; only
+binary crates are installed. Add `--force` to either command when replacing an
+already-installed build with a new build from the same version.
+
 For a single local command that prepares an isolated test config, checks the
 workspace, builds `nexkvm`, builds the desktop package where supported, and runs
 CLI smoke tests:

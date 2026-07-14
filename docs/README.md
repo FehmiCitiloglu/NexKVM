@@ -15,6 +15,8 @@ This directory collects the stable design contracts for nexkvm. Research notes l
   implementation, and mark items complete only after verified repository
   changes land.
 - [Release Readiness](release-readiness.md): production gates, security requirements, platform smoke checks, and artifact expectations.
+- [Real-Device Input Alpha Smoke](smoke/real-device-input-alpha.md)
+- [Public Alpha Notes](alpha-release-notes.md)
 
 ## Contribution Entry Point
 

@@ -56,6 +56,8 @@ pub struct Config {
     pub security: SecurityConfig,
     /// Keyboard/mouse sharing runtime settings.
     pub input: InputConfig,
+    /// Clipboard runtime settings.
+    pub clipboard: ClipboardConfig,
     /// Logging/diagnostics.
     pub telemetry: TelemetryConfig,
     /// Plugin runtime settings.
@@ -183,6 +185,14 @@ pub enum InputControlRole {
     Target,
     /// Enable source and target behavior.
     Both,
+}
+
+/// `[clipboard]` section.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipboardConfig {
+    /// Enable runtime clipboard synchronization with trusted peers.
+    pub sync_enabled: bool,
 }
 
 /// `[plugins]` section.
@@ -343,6 +353,28 @@ mod tests {
             parsed.input.emergency_stop_keycode,
             cfg.input.emergency_stop_keycode
         );
+        assert_eq!(parsed.clipboard.sync_enabled, cfg.clipboard.sync_enabled);
+    }
+
+    #[test]
+    fn clipboard_config_defaults_to_disabled() {
+        let cfg = Config::default();
+        assert!(!cfg.clipboard.sync_enabled);
+    }
+
+    #[test]
+    fn clipboard_config_round_trips_through_toml() {
+        let text = r#"
+[clipboard]
+sync_enabled = true
+"#;
+
+        let parsed: Config = toml::from_str(text).unwrap();
+        assert!(parsed.clipboard.sync_enabled);
+
+        let rendered = toml::to_string_pretty(&parsed).unwrap();
+        assert!(rendered.contains("[clipboard]"));
+        assert!(rendered.contains("sync_enabled = true"));
     }
 
     #[test]

@@ -20,6 +20,7 @@ use tracing::info;
 mod cli;
 mod connection;
 mod input_session;
+#[cfg(test)]
 mod simulation;
 
 use cli::{AudioSmokeAction, Command};
@@ -151,7 +152,10 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
                 .unwrap_or(false)
         }
     };
-    let clipboard_peer_handler = create_clipboard_peer_handler(clipboard_can_access, device.id);
+    let clipboard_peer_handler = create_clipboard_peer_handler(
+        clipboard_runtime_enabled(config.clipboard.sync_enabled, clipboard_can_access),
+        device.id,
+    );
     let trusted_peer_keys = trusted_public_keys();
     let local_identity = load_local_identity(&config_path, &config.device.name)?;
     let local_fingerprint = local_identity.public_key().fingerprint();
@@ -251,6 +255,24 @@ fn input_runtime_role(role: nexkvm_storage::InputControlRole) -> input_session::
         nexkvm_storage::InputControlRole::Source => input_session::InputRuntimeRole::Source,
         nexkvm_storage::InputControlRole::Target => input_session::InputRuntimeRole::Target,
         nexkvm_storage::InputControlRole::Both => input_session::InputRuntimeRole::Both,
+    }
+}
+
+fn storage_input_role_label(role: nexkvm_storage::InputControlRole) -> &'static str {
+    match role {
+        nexkvm_storage::InputControlRole::Disabled => "disabled",
+        nexkvm_storage::InputControlRole::Source => "source",
+        nexkvm_storage::InputControlRole::Target => "target",
+        nexkvm_storage::InputControlRole::Both => "both",
+    }
+}
+
+fn storage_input_edge_label(edge: nexkvm_storage::InputHandoffEdge) -> &'static str {
+    match edge {
+        nexkvm_storage::InputHandoffEdge::Left => "left",
+        nexkvm_storage::InputHandoffEdge::Right => "right",
+        nexkvm_storage::InputHandoffEdge::Top => "top",
+        nexkvm_storage::InputHandoffEdge::Bottom => "bottom",
     }
 }
 
@@ -373,6 +395,10 @@ fn merge_peer_handlers(
     input.or(clipboard)
 }
 
+fn clipboard_runtime_enabled(sync_enabled: bool, can_access_clipboard: bool) -> bool {
+    sync_enabled && can_access_clipboard
+}
+
 fn create_clipboard_peer_handler(
     can_access_clipboard: bool,
     local_device_id: nexkvm_core::DeviceId,
@@ -386,7 +412,8 @@ fn create_clipboard_peer_handler(
         use std::sync::Mutex;
 
         let clipboard = Arc::new(nexkvm_platform_macos::MacosClipboard::new());
-        // Create a sync state machine per peer with plaintext cipher (TODO: use session encryption)
+        // Clipboard sync is opt-in for the input alpha and still uses the existing
+        // clipboard state machine until the dedicated clipboard release slice.
         let sync = Arc::new(Mutex::new(ClipboardSync::new(
             local_device_id,
             Box::new(PlaintextCipher),
@@ -473,9 +500,7 @@ fn create_clipboard_peer_handler(
                             }
 
                             // Decode the update
-                            match nexkvm_clipboard::ClipboardUpdate::decode(bytes::Bytes::from(
-                                envelope.body,
-                            )) {
+                            match nexkvm_clipboard::ClipboardUpdate::decode(envelope.body) {
                                 Ok(update) => {
                                     // Apply the update via the sync state machine
                                     let snapshot_result = match sync_recv.lock() {
@@ -756,6 +781,19 @@ fn doctor() -> anyhow::Result<()> {
     );
     println!("  transports: {}", config.network.transports.join(","));
     println!("  require pairing: {}", config.security.require_pairing);
+    for line in cli::format_input_alpha_runtime(
+        storage_input_role_label(config.input.control_role),
+        config.input.active_peer.as_deref(),
+        storage_input_edge_label(config.input.handoff_edge),
+        config.input.emergency_stop_keycode,
+        config.input.remote_focus_timeout_millis,
+        config.network.connect_addr.as_deref(),
+        config.clipboard.sync_enabled,
+    )
+    .lines()
+    {
+        println!("  {line}");
+    }
     println!("  plugins enabled: {}", config.plugins.enabled);
     println!(
         "  workspace unified desktop: {}",
@@ -1314,14 +1352,14 @@ fn build_connection_plan<'a>(device: &'a SimDevice) -> SimConnectionPlanEntry<'a
         };
     }
 
-    if let Some(address) = device.address.as_deref() {
-        if address.parse::<SocketAddr>().is_err() {
-            return SimConnectionPlanEntry {
-                device,
-                kind: SimConnectionPlanKind::InvalidConfiguration,
-                detail: format!("invalid address `{address}` (expected ip:port)"),
-            };
-        }
+    if let Some(address) = device.address.as_deref()
+        && address.parse::<SocketAddr>().is_err()
+    {
+        return SimConnectionPlanEntry {
+            device,
+            kind: SimConnectionPlanKind::InvalidConfiguration,
+            detail: format!("invalid address `{address}` (expected ip:port)"),
+        };
     }
 
     if !device.trusted.unwrap_or(false) {
@@ -2025,5 +2063,18 @@ fn platform_backend() -> Option<Box<dyn PlatformBackend>> {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_runtime_requires_config_and_platform_access() {
+        assert!(!clipboard_runtime_enabled(false, false));
+        assert!(!clipboard_runtime_enabled(false, true));
+        assert!(!clipboard_runtime_enabled(true, false));
+        assert!(clipboard_runtime_enabled(true, true));
     }
 }

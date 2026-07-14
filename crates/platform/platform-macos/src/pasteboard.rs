@@ -3,6 +3,9 @@
 //! Maps between macOS NSPasteboard UTIs and standard MIME types for transparent
 //! cross-platform clipboard synchronization of text, HTML, RTF, and image formats.
 
+// Native framework calls are isolated in this module behind safe crate APIs.
+#![allow(unsafe_code)]
+
 use nexkvm_clipboard::{ClipboardContent, ClipboardError, ClipboardSnapshot};
 use objc2::rc::autoreleasepool;
 use objc2::{class, msg_send};

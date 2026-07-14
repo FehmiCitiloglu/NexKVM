@@ -46,7 +46,7 @@ impl fmt::Debug for MacosClipboard {
 #[async_trait]
 impl Clipboard for MacosClipboard {
     async fn read(&self) -> Result<Option<ClipboardSnapshot>, ClipboardError> {
-        tokio::task::spawn_blocking(|| pasteboard::read_pasteboard())
+        tokio::task::spawn_blocking(pasteboard::read_pasteboard)
             .await
             .map_err(|e| ClipboardError::Backend(format!("clipboard read task failed: {e}")))?
     }
@@ -60,9 +60,6 @@ impl Clipboard for MacosClipboard {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use nexkvm_clipboard::ClipboardContent;
-
     // Note: Full roundtrip tests require system clipboard access and a functioning
     // macOS environment, so we omit them from the unit test suite. Integration tests
     // can verify clipboard synchronization end-to-end when run on a full system.

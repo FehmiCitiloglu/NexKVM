@@ -7,6 +7,7 @@
 
 use std::fmt::Write as _;
 
+#[cfg(test)]
 use crate::simulation::SimulationReport;
 use nexkvm_core::NativeIntegrationReport;
 use nexkvm_crypto::{PairingBootstrap, TrustEntry};
@@ -302,6 +303,7 @@ pub fn format_pairing(bootstrap: &PairingBootstrap) -> String {
 
 /// Render a validated local simulation report.
 #[must_use]
+#[cfg(test)]
 pub fn format_simulation_report(path: &str, report: &SimulationReport) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "nexkvm simulation");
@@ -405,6 +407,45 @@ pub fn format_macos_input_report(
             "  after granting permission: restart nexkvm after granting permission"
         );
     }
+    out.truncate(out.trim_end().len());
+    out
+}
+
+/// Render release-relevant input runtime configuration for `nexkvm doctor`.
+#[must_use]
+pub fn format_input_alpha_runtime(
+    role: &str,
+    active_peer: Option<&str>,
+    handoff_edge: &str,
+    emergency_stop_keycode: u32,
+    remote_focus_timeout_millis: u64,
+    connect_addr: Option<&str>,
+    clipboard_sync_enabled: bool,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "input alpha runtime");
+    let _ = writeln!(out, "  role: {role}");
+    let _ = writeln!(out, "  active peer: {}", active_peer.unwrap_or("unset"));
+    let _ = writeln!(out, "  handoff edge: {handoff_edge}");
+    let _ = writeln!(out, "  emergency keycode: {emergency_stop_keycode}");
+    let _ = writeln!(
+        out,
+        "  remote focus timeout: {remote_focus_timeout_millis} ms"
+    );
+    let _ = writeln!(
+        out,
+        "  explicit connect: {}",
+        connect_addr.unwrap_or("disabled")
+    );
+    let _ = writeln!(
+        out,
+        "  clipboard sync: {}",
+        if clipboard_sync_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     out.truncate(out.trim_end().len());
     out
 }
@@ -736,5 +777,36 @@ mod tests {
         assert!(rendered.contains("Grant Accessibility permission"));
         assert!(rendered.contains("System Settings"));
         assert!(rendered.contains("restart nexkvm after granting permission"));
+    }
+
+    #[test]
+    fn input_alpha_runtime_report_lists_release_relevant_settings() {
+        let rendered = format_input_alpha_runtime(
+            "source",
+            Some("studio-mac"),
+            "right",
+            41,
+            3_000,
+            Some("192.168.1.20:47654"),
+            false,
+        );
+
+        assert!(rendered.contains("input alpha runtime"));
+        assert!(rendered.contains("role: source"));
+        assert!(rendered.contains("active peer: studio-mac"));
+        assert!(rendered.contains("handoff edge: right"));
+        assert!(rendered.contains("emergency keycode: 41"));
+        assert!(rendered.contains("remote focus timeout: 3000 ms"));
+        assert!(rendered.contains("explicit connect: 192.168.1.20:47654"));
+        assert!(rendered.contains("clipboard sync: disabled"));
+    }
+
+    #[test]
+    fn input_alpha_runtime_report_handles_unset_peer_and_connect_addr() {
+        let rendered =
+            format_input_alpha_runtime("disabled", None, "right", 41, 3_000, None, false);
+
+        assert!(rendered.contains("active peer: unset"));
+        assert!(rendered.contains("explicit connect: disabled"));
     }
 }

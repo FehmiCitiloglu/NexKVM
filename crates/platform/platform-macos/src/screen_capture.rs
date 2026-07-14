@@ -7,6 +7,9 @@
 //! Frame sequence numbering is monotonic per backend instance to support
 //! encoder state machines and frame ordering.
 
+// Native framework calls are isolated in this module behind safe crate APIs.
+#![allow(unsafe_code)]
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use nexkvm_streaming::{

@@ -1376,7 +1376,7 @@ mod tests {
 
     #[tokio::test]
     async fn reis_decoder_requires_portal_eis_fd() {
-        let decoder = ReisPortalEisEventDecoder::default();
+        let decoder = ReisPortalEisEventDecoder;
         let error = decoder
             .next_event(&PortalEisConnection {
                 session_handle: "/org/freedesktop/portal/desktop/session/nexkvm/capture".into(),
