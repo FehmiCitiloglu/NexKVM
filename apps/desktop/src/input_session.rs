@@ -184,6 +184,7 @@ impl ExtendedInputShare {
 #[derive(Debug, Clone)]
 pub struct LinkedScreenInputShare {
     controller: MouseShareController,
+    edge: HandoffEdge,
     emergency_stop_keycode: u32,
     last_local_pos: Option<(f64, f64)>,
 }
@@ -202,6 +203,7 @@ impl LinkedScreenInputShare {
         );
         Self {
             controller: MouseShareController::new(boundary, local_layout),
+            edge,
             emergency_stop_keycode,
             last_local_pos: None,
         }
@@ -235,7 +237,7 @@ impl LinkedScreenInputShare {
             return None;
         };
         self.last_local_pos = Some((x, y));
-        let (px, py) = normalized_to_default_pixels(x, y);
+        let (px, py) = boundary_sample_for_edge(self.edge, x, y);
         match self.controller.on_local_cursor(px, py) {
             ShareOutput::EnterRemote(entry) => Some(entry.entry_event()),
             _ => None,
@@ -280,6 +282,19 @@ fn normalized_to_default_pixels(x: f64, y: f64) -> (i32, i32) {
         (x.clamp(0.0, 1.0) * 1000.0).round() as i32,
         (y.clamp(0.0, 1.0) * 1000.0).round() as i32,
     )
+}
+
+fn boundary_sample_for_edge(edge: HandoffEdge, x: f64, y: f64) -> (i32, i32) {
+    let (mut px, mut py) = normalized_to_default_pixels(x, y);
+    if at_handoff_edge(edge, x, y) {
+        match edge {
+            HandoffEdge::Left => px = -1,
+            HandoffEdge::Right => px = 1000,
+            HandoffEdge::Top => py = -1,
+            HandoffEdge::Bottom => py = 1000,
+        }
+    }
+    (px, py)
 }
 
 pub async fn forward_extended_until_error<C, K, S>(
@@ -349,7 +364,6 @@ where
     }
 }
 
-#[cfg(test)]
 fn at_handoff_edge(edge: HandoffEdge, x: f64, y: f64) -> bool {
     const EPSILON: f64 = 0.995;
     match edge {
@@ -592,6 +606,59 @@ mod tests {
             None
         );
         assert!(!share.is_remote());
+    }
+
+    #[test]
+    fn linked_screen_share_hands_off_from_a_clamped_last_display_pixel() {
+        let mut share = LinkedScreenInputShare::single_peer(HandoffEdge::Right, 41);
+        let last_pixel_x = 1727.0 / 1728.0;
+
+        assert_eq!(
+            share.route(InputEvent::PointerMove {
+                x: last_pixel_x,
+                y: 0.5,
+            }),
+            Some(InputEvent::PointerMove { x: 0.0, y: 0.5 })
+        );
+        assert!(share.is_remote());
+    }
+
+    #[test]
+    fn linked_screen_share_hands_off_at_each_clamped_edge() {
+        let cases = [
+            (
+                HandoffEdge::Left,
+                InputEvent::PointerMove { x: 0.0, y: 0.25 },
+                InputEvent::PointerMove { x: 1.0, y: 0.25 },
+            ),
+            (
+                HandoffEdge::Right,
+                InputEvent::PointerMove {
+                    x: 1727.0 / 1728.0,
+                    y: 0.25,
+                },
+                InputEvent::PointerMove { x: 0.0, y: 0.25 },
+            ),
+            (
+                HandoffEdge::Top,
+                InputEvent::PointerMove { x: 0.25, y: 0.0 },
+                InputEvent::PointerMove { x: 0.25, y: 1.0 },
+            ),
+            (
+                HandoffEdge::Bottom,
+                InputEvent::PointerMove {
+                    x: 0.25,
+                    y: 1116.0 / 1117.0,
+                },
+                InputEvent::PointerMove { x: 0.25, y: 0.0 },
+            ),
+        ];
+
+        for (edge, event, expected) in cases {
+            let mut share = LinkedScreenInputShare::single_peer(edge, 41);
+            assert_eq!(share.route(event), Some(expected), "edge: {edge:?}");
+            assert!(share.is_remote(), "edge: {edge:?}");
+        }
     }
 
     #[test]

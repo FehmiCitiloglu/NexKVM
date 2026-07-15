@@ -15,7 +15,7 @@ to `[x]` only when every required row for that item is `pass`.
 
 | Role | Device | OS | NexKVM build | Address |
 | --- | --- | --- | --- | --- |
-| Source | nexkvm (macOS) | macOS | local release build | 192.168.1.41:47654 |
+| Source | nexkvm (macOS) | macOS | local release build | 192.168.1.34:47654 |
 | Target | nexkvm (Windows) | Windows | local release build | 192.168.1.27:47654 |
 
 ## Build
@@ -184,14 +184,14 @@ Record each result:
 | Check | Required for | Result | Evidence |
 | --- | --- | --- | --- |
 | First launch prompts are understandable on macOS and Windows | first-launch platform smoke | fail | not yet run |
-| macOS Accessibility prompt and restart path works | permission prompt smoke | fail | not yet run |
-| Pairing persists on both devices | pairing smoke | fail | not yet run |
-| Explicit peer address connects | input alpha | fail | not yet run |
-| Pointer crosses configured edge to target | cursor edge crossing | fail | not yet run |
-| Keyboard input reaches target | keyboard sharing | fail | not yet run |
+| macOS Accessibility prompt and restart path works | permission prompt smoke | pass | initial `doctor` reported permission-required; after granting Accessibility and restarting the terminal, `permissions` and `doctor` reported capture/injection ready |
+| Pairing persists on both devices | pairing smoke | pass | macOS `devices`: Windows fingerprint `65:62:a6:62:7d:b2:e6:16`; Windows `devices`: current macOS fingerprint `01:d3:54:e8:ab:b5:70:04` |
+| Explicit peer address connects | input alpha | pass | after reboot, macOS `lsof`: `192.168.1.34` connected to trusted Windows target `192.168.1.27:47654` with TCP state `ESTABLISHED` |
+| Pointer crosses configured edge to target | cursor edge crossing | fail | 2026-07-15 test exposed an unreachable clamped edge; the working-tree fix maps the configured 0.5% edge band out of bounds and passes regressions for all four edges, but a physical-input retest is still required because Computer Use generates synthetic accessibility input |
+| Keyboard input reaches target | keyboard sharing | fail | pre-fix marker `edgevisualtwo` appeared in local Mac TextEdit while Windows Notepad remained empty; post-fix Computer Use keyboard events bypassed the hardware event-tap path, so physical keyboard verification remains pending |
 | Mouse buttons reach target | mouse sharing | fail | not yet run |
 | Scroll reaches target | mouse sharing | fail | not yet run |
-| Source input is suppressed during remote focus | input alpha safety | fail | not yet run |
+| Source input is suppressed during remote focus | input alpha safety | fail | pre-fix marker `edgevisualtwo` was not suppressed because edge handoff never engaged; post-fix physical-input verification remains pending |
 | Escape releases remote focus without forwarding Escape | emergency release | fail | not yet run |
 | Focus timeout releases remote focus | timeout release | fail | not yet run |
 | Target disconnect releases source focus | disconnect release | fail | not yet run |

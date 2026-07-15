@@ -3,7 +3,7 @@
 //! The backend posts events with `CGEventPost`/`CGEventCreateMouseEvent`/
 //! `CGEventCreateKeyboardEvent` once Accessibility permission is granted. The
 //! pure planning layer stays testable, while native FFI is isolated in
-//! [`NativeEventPoster`].
+//! `NativeEventPoster`.
 //!
 //! # Keycode caveat
 //! [`InjectionCommand::Key`] carries an OS-neutral USB HID usage id. macOS
