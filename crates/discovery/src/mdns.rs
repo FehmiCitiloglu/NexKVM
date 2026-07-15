@@ -1,9 +1,10 @@
 //! mDNS / DNS-SD discovery backend (feature `mdns`).
 //!
-//! The preferred LAN backend where available: it integrates with the OS service
-//! discovery stack (Bonjour/Avahi), is link-local-multicast based, and is what
-//! AirDrop/KDE Connect-style flows use. Registered under [`SERVICE_TYPE`]; peer
-//! metadata travels in TXT records ([`ServiceAnnouncement::to_txt`]).
+//! An optional LAN backend that integrates with the OS service discovery stack
+//! (Bonjour/Avahi) and uses link-local multicast. The current desktop release
+//! path uses UDP broadcast; this backend remains available behind the `mdns`
+//! feature. It registers under [`SERVICE_TYPE`], with peer metadata in TXT
+//! records ([`ServiceAnnouncement::to_txt`]).
 //!
 //! # Platform notes
 //! - macOS ships Bonjour; Linux typically needs Avahi running; Windows 10+ has a
@@ -17,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use nexkvm_core::identity::DeviceInfo;
 
 use crate::announce::{SERVICE_TYPE, ServiceAnnouncement};
@@ -122,7 +123,11 @@ impl Discovery for MdnsDiscovery {
         )?;
         let fullname = service.get_fullname().to_string();
         self.daemon.register(service)?;
-        *self.registered.lock().expect("registered mutex poisoned") = Some(fullname);
+        *self
+            .registered
+            .lock()
+            .map_err(|_| DiscoveryError::Backend("registered service lock poisoned".into()))? =
+            Some(fullname);
         Ok(())
     }
 
@@ -131,18 +136,53 @@ impl Discovery for MdnsDiscovery {
     }
 }
 
-fn resolved_to_device(info: &ServiceInfo) -> Option<DiscoveredDevice> {
+fn resolved_to_device(info: &ResolvedService) -> Option<DiscoveredDevice> {
     // Reconstruct the TXT map the announcement codec understands.
     let mut txt = std::collections::HashMap::new();
     for prop in info.get_properties().iter() {
         txt.insert(prop.key().to_string(), prop.val_str().to_string());
     }
     let announcement = ServiceAnnouncement::from_txt(&txt).ok()?;
-    let ip = info.get_addresses().iter().next().copied()?;
+    let ip = info.get_addresses().iter().next()?.to_ip_addr();
     let addr = SocketAddr::new(ip, announcement.port);
     Some(DiscoveredDevice {
         info: announcement.info,
         addr,
         fingerprint: announcement.fingerprint,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use nexkvm_core::identity::OsKind;
+
+    use super::*;
+
+    #[test]
+    fn converts_resolved_service_from_current_mdns_api() {
+        let info = DeviceInfo::new("Apple Silicon Mac", OsKind::MacOs);
+        let announcement =
+            ServiceAnnouncement::new(info.clone(), 47_654, 1).with_fingerprint("aa:bb");
+        let service = ServiceInfo::new(
+            SERVICE_TYPE,
+            &info.id.to_string(),
+            "nexkvm-test.local.",
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+            47_654,
+            announcement.to_txt(),
+        )
+        .expect("valid service fixture")
+        .as_resolved_service();
+
+        let discovered = resolved_to_device(&service).expect("resolved service converts");
+
+        assert_eq!(discovered.info, info);
+        assert_eq!(
+            discovered.addr,
+            "192.0.2.10:47654".parse().expect("valid address")
+        );
+        assert_eq!(discovered.fingerprint.as_deref(), Some("aa:bb"));
+    }
 }

@@ -40,6 +40,7 @@
 mod error;
 mod secure;
 mod selector;
+mod sequence;
 mod transport;
 
 pub mod bandwidth;
@@ -101,10 +102,11 @@ pub use remote_session::{
 };
 pub use retry::Backoff;
 pub use secure::{
-    SecureConnection, establish_trusted_session, trusted_peer_session_security,
-    trusted_session_transcript,
+    SecureConnection, establish_trusted_session, establish_trusted_session_with_material,
+    trusted_peer_session_security, trusted_session_context, trusted_session_transcript,
 };
 pub use selector::TransportSelector;
+pub use sequence::SequencedConnection;
 pub use session::{Session, SessionToken};
 pub use transport::{Connection, Transport, TransportKind};
 

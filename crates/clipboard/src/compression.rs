@@ -14,6 +14,9 @@
 use crate::ClipboardError;
 use crate::content::ClipboardSnapshot;
 
+/// Safety cap used by the convenience [`decompress`] API.
+const DEFAULT_MAX_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
+
 /// Compression algorithm tag carried on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -67,10 +70,37 @@ pub fn compress(alg: CompressionAlgorithm, data: &[u8]) -> Result<Vec<u8>, Clipb
 /// Returns [`ClipboardError::Unsupported`] if `alg` requires a feature that is
 /// not compiled in, or [`ClipboardError::Compression`] on corrupt input.
 pub fn decompress(alg: CompressionAlgorithm, data: &[u8]) -> Result<Vec<u8>, ClipboardError> {
+    decompress_bounded(alg, data, DEFAULT_MAX_DECOMPRESSED_BYTES)
+}
+
+/// Decompress `data`, refusing to produce more than `max_output` bytes.
+///
+/// The decoder reads at most `max_output + 1` bytes so a compressed payload
+/// cannot allocate an unbounded output buffer before its size is validated.
+///
+/// # Errors
+/// Returns [`ClipboardError::TooLarge`] when decoded output exceeds
+/// `max_output`, [`ClipboardError::Unsupported`] when the selected codec is not
+/// compiled in, or [`ClipboardError::Compression`] for corrupt input.
+pub fn decompress_bounded(
+    alg: CompressionAlgorithm,
+    data: &[u8],
+    max_output: usize,
+) -> Result<Vec<u8>, ClipboardError> {
     match alg {
-        CompressionAlgorithm::None => Ok(data.to_vec()),
-        CompressionAlgorithm::Deflate => deflate_decompress(data),
+        CompressionAlgorithm::None => bounded_identity(data, max_output),
+        CompressionAlgorithm::Deflate => deflate_decompress_bounded(data, max_output),
     }
+}
+
+fn bounded_identity(data: &[u8], max_output: usize) -> Result<Vec<u8>, ClipboardError> {
+    if data.len() > max_output {
+        return Err(ClipboardError::TooLarge {
+            size: data.len(),
+            limit: max_output,
+        });
+    }
+    Ok(data.to_vec())
 }
 
 #[cfg(feature = "compression")]
@@ -88,15 +118,25 @@ fn deflate_compress(data: &[u8]) -> Result<Vec<u8>, ClipboardError> {
 }
 
 #[cfg(feature = "compression")]
-fn deflate_decompress(data: &[u8]) -> Result<Vec<u8>, ClipboardError> {
+fn deflate_decompress_bounded(data: &[u8], max_output: usize) -> Result<Vec<u8>, ClipboardError> {
     use std::io::Read;
 
     use flate2::read::DeflateDecoder;
 
-    let mut dec = DeflateDecoder::new(data);
+    let dec = DeflateDecoder::new(data);
+    let read_limit = u64::try_from(max_output)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     let mut out = Vec::new();
-    dec.read_to_end(&mut out)
+    dec.take(read_limit)
+        .read_to_end(&mut out)
         .map_err(|e| ClipboardError::Compression(e.to_string()))?;
+    if out.len() > max_output {
+        return Err(ClipboardError::TooLarge {
+            size: out.len(),
+            limit: max_output,
+        });
+    }
     Ok(out)
 }
 
@@ -108,7 +148,7 @@ fn deflate_compress(_data: &[u8]) -> Result<Vec<u8>, ClipboardError> {
 }
 
 #[cfg(not(feature = "compression"))]
-fn deflate_decompress(_data: &[u8]) -> Result<Vec<u8>, ClipboardError> {
+fn deflate_decompress_bounded(_data: &[u8], _max_output: usize) -> Result<Vec<u8>, ClipboardError> {
     Err(ClipboardError::Unsupported(
         "deflate (compression feature off)",
     ))
@@ -186,6 +226,21 @@ mod tests {
         assert!(compressed.len() < data.len());
         let restored = decompress(CompressionAlgorithm::Deflate, &compressed).unwrap();
         assert_eq!(restored, data);
+    }
+
+    #[cfg(feature = "compression")]
+    #[test]
+    fn deflate_rejects_output_past_limit() {
+        let data = vec![b'z'; 4096];
+        let compressed = compress(CompressionAlgorithm::Deflate, &data).unwrap();
+
+        assert!(matches!(
+            decompress_bounded(CompressionAlgorithm::Deflate, &compressed, 1024),
+            Err(ClipboardError::TooLarge {
+                size: 1025,
+                limit: 1024
+            })
+        ));
     }
 
     #[test]

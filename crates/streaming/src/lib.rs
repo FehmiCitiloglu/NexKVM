@@ -30,10 +30,12 @@ mod audio;
 mod audio_sync;
 mod file_transfer_cipher;
 mod file_transfer_compression;
+mod file_transfer_disk;
 mod file_transfer_queue;
 mod file_transfer_reassembly;
 mod file_transfer_session;
 mod file_transfer_types;
+mod file_transfer_wire;
 mod preview;
 mod screen;
 
@@ -49,7 +51,9 @@ pub use file_transfer_compression::{
     compress as compress_transfer_bytes,
     compress_with_policy as compress_transfer_bytes_with_policy,
     decompress as decompress_transfer_bytes,
+    decompress_bounded as decompress_transfer_bytes_bounded,
 };
+pub use file_transfer_disk::{TransferFileReader, TransferPartWriter, create_transfer_directory};
 pub use file_transfer_queue::{QueueState, QueuedTransfer, TransferProgress, TransferQueue};
 pub use file_transfer_reassembly::{CompletedFile, TransferReassembler};
 pub use file_transfer_session::{
@@ -58,6 +62,31 @@ pub use file_transfer_session::{
 pub use file_transfer_types::{
     TransferEntry, TransferFileData, TransferId, TransferManifest, TransferSource,
 };
+pub use file_transfer_wire::{FileTransferMessage, TransferManifestCodec};
+
+/// Maximum decoded plaintext carried by one file-transfer chunk.
+///
+/// Keeping chunks well below the 16 MiB transport frame limit leaves room for
+/// envelope, transfer, and authenticated-encryption overhead while bounding
+/// receiver memory and decompression work.
+pub const MAX_TRANSFER_CHUNK_SIZE: usize = 4 * 1024 * 1024;
+/// File-transfer wire protocol version.
+///
+/// Version 2 requires a SHA-256 digest for every file manifest entry. Version
+/// 1 offers are deliberately rejected because their contents cannot be
+/// authenticated against the manifest before publication.
+pub const FILE_TRANSFER_WIRE_VERSION: u16 = 2;
+/// Fixed byte length of each file entry's SHA-256 content digest.
+pub const FILE_TRANSFER_SHA256_BYTES: usize = 32;
+/// Largest encoded file-transfer message that still fits the authenticated
+/// 16 MiB transport frame after envelope and AEAD overhead.
+pub const MAX_FILE_TRANSFER_WIRE_BYTES: usize = 16 * 1024 * 1024 - (14 + 6 + 16);
+/// Maximum number of entries accepted in one transfer manifest.
+pub const MAX_TRANSFER_MANIFEST_ENTRIES: usize = 16 * 1024;
+/// Maximum UTF-8 byte length of one canonical relative transfer path.
+pub const MAX_TRANSFER_PATH_BYTES: usize = 4 * 1024;
+/// Maximum total logical bytes accepted in one transfer (1 TiB).
+pub const MAX_TRANSFER_TOTAL_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 pub use preview::{HoverPreviewController, PreviewDecision, PreviewPolicy};
 pub use screen::{
     CaptureSource, CaptureSourceId, EncodedScreenFrame, FrameDependency, GpuMemoryKind,
@@ -124,6 +153,36 @@ pub enum TransferError {
     /// Feature not compiled in.
     #[error("unsupported transfer capability: {0}")]
     Unsupported(&'static str),
+
+    /// Chunk size is outside the supported sender range.
+    #[error("invalid transfer chunk size {size} bytes (expected 1..={max})")]
+    InvalidChunkSize {
+        /// Requested chunk size.
+        size: usize,
+        /// Largest supported decoded chunk.
+        max: usize,
+    },
+
+    /// A streamed chunk arrived at a non-contiguous offset.
+    #[error("unexpected transfer offset {actual}, expected {expected}")]
+    UnexpectedOffset {
+        /// Required next offset.
+        expected: u64,
+        /// Peer- or caller-supplied offset.
+        actual: u64,
+    },
+
+    /// A filesystem destination is a symlink or crosses a symlinked ancestor.
+    #[error("unsafe transfer destination: {0}")]
+    UnsafeDestination(String),
+
+    /// Final or temporary destination already exists and will not be replaced.
+    #[error("transfer destination already exists: {0}")]
+    DestinationExists(String),
+
+    /// Filesystem or stream I/O failure.
+    #[error("transfer I/O error: {0}")]
+    Io(#[from] std::io::Error),
 
     /// Data exceeds configured/wire limit.
     #[error("transfer payload too large: {size} bytes (limit {limit})")]

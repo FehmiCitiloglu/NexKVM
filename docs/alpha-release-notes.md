@@ -1,36 +1,50 @@
-# NexKVM Public Alpha Notes
+# NexKVM Apple Silicon Preview Notes
 
-This alpha focuses on real-device keyboard and mouse sharing between trusted
-desktop peers over a LAN connection.
+This preview concentrates on a Barrier-style experience between two trusted
+Apple Silicon Macs on the same LAN. The code and automated tests are release-
+candidate inputs; publication remains blocked until the signed artifact and
+physical two-Mac evidence in [Release Readiness](release-readiness.md) pass.
 
-## Included In The Alpha
+## Included candidate functionality
 
-- Mac-to-Windows real-device keyboard and mouse sharing when the smoke record
-  passes, with macOS as the input source and Windows as the target.
-- Pairing through `nexkvm pairing-uri` and `nexkvm pair --accept`.
-- Explicit TCP peer connection through `network.connect_addr`.
-- Edge-based pointer handoff.
-- Source-side input suppression while remote focus is active on supported
-  platforms.
-- Emergency key, timeout, disconnect, and daemon shutdown release paths.
-- GUI-assisted configuration, daemon start/stop, pairing, diagnostics, and
-  notification output.
+- Mutual pairing with persisted public-key trust and authenticated sessions.
+- Explicit trusted Active peer selection by device name or fingerprint.
+- Source, Target, and Both keyboard/mouse roles.
+- GUI screen placement on the left, right, top, or bottom, with live edge
+  reconfiguration.
+- Physical-input handoff model with local suppression during remote focus and
+  Escape, timeout, disconnect, topology-change, and shutdown release paths.
+- Multi-format clipboard synchronization with echo suppression, bounds, and
+  concealed-item exclusion.
+- Bounded encrypted clipboard history with GUI/CLI listing, restore, and clear.
+- Authenticated, bounded file and directory transfer with integrity checks,
+  durable queueing, checkpointing, and resume support.
+- Apple Silicon app-bundle packaging with a GUI main executable and sibling
+  daemon, plus fail-closed Developer ID signing/notarization mode.
 
-## Known Limitations
+## Scope and known limitations
 
-- This is a public alpha, not the full commercial release described in
-  `docs/release-readiness.md`.
-- Clipboard sync is disabled by default and is not part of the input alpha.
-- Screen streaming, hover previews, audio routing, file transfer, mobile
-  companion apps, WebRTC remote mode, relay mode, cloud sync, and plugin
-  marketplace support are outside this alpha.
-- The reverse Windows-to-Mac input direction is not covered by the initial
-  alpha smoke record.
-- Linux input is capability-limited unless a real Wayland portal smoke passes.
-- Signed installers, SBOM, checksums, and every-OS smoke evidence remain
-  production release gates.
+- Only Apple Silicon (`arm64`) macOS is in the supported release-candidate
+  scope. Intel/Universal macOS, Windows, and Linux are not production claims.
+- The application is intended for a trusted, reachable LAN. WAN relay and cloud
+  brokering are not included.
+- Enabling file transfer permits the selected authenticated peer to send files;
+  there is no per-transfer acceptance dialog.
+- Clipboard history is encrypted on disk, but restoring an item places it on
+  the system clipboard, where applications with clipboard access can read it.
+- History archives are not bulk-replicated. Received current selections enter
+  local history, and restoring an older entry makes it current for sync.
+- Screen streaming, audio routing, mobile companions, remote relay, cloud sync,
+  and the plugin marketplace are outside this preview.
+- An ad-hoc package can trigger Gatekeeper warnings and is never a public
+  release artifact.
+- Automated tests do not prove physical event-tap behavior, TCC permission UX,
+  a clean-machine Gatekeeper launch, or two-device interruption recovery.
 
-## Publishing Rule
+## Publication rule
 
-Publish only with the current `docs/smoke/real-device-input-alpha.md` evidence
-record and keep every unsupported feature listed above in the known limitations.
+Do not describe the preview as production-ready or error-free unless the exact
+signed/notarized artifact has completed every row in
+[macOS KVM Smoke Checks](smoke/macos-kvm-mvp.md), including two physical Macs,
+left/right edge handoff, clipboard/history, file transfer/resume, restart,
+permission denial, and Gatekeeper validation.

@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
+use nexkvm_crypto::PublicKey;
 use nexkvm_protocol::Envelope;
 
 use crate::error::NetworkError;
@@ -40,6 +41,12 @@ pub trait Connection: Send + Sync {
 
     /// Remote peer address.
     fn peer_addr(&self) -> SocketAddr;
+
+    /// Authenticated peer identity when the connection completed the trusted
+    /// session handshake. Plain transport connections return `None`.
+    fn peer_identity(&self) -> Option<PublicKey> {
+        None
+    }
 
     /// Send one envelope to the peer.
     ///

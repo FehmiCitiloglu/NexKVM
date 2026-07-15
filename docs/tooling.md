@@ -59,9 +59,10 @@ config:
 ./scripts/test-project.sh
 ```
 
-On macOS this also creates the unsigned `.app` archive through
-`scripts/package-macos.sh`. Set `NEXKVM_SKIP_PACKAGE=1` to skip package
-generation. On Linux, set `NEXKVM_RUN_LINUX_PACKAGING=1` to opt into the heavier
+On macOS this also creates an ad-hoc-signed Apple Silicon `.app` archive through
+`scripts/package-macos.sh`; the bundle launches `nexkvm-gui` and includes the
+sibling `nexkvm` daemon. Set `NEXKVM_SKIP_PACKAGE=1` to skip package generation.
+On Linux, set `NEXKVM_RUN_LINUX_PACKAGING=1` to opt into the heavier
 `.deb`/`.rpm`/AppImage packaging path.
 
 ## Local Simulation

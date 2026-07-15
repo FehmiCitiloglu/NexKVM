@@ -63,7 +63,7 @@ fn handoff_drives_peer_then_returns_local() {
     //    cursor re-homes at A's right edge at the current height.
     match a.on_remote_motion(-0.6, 0.0) {
         ShareOutput::ReturnLocal { x, y } => {
-            assert_eq!(x, 1920, "re-home at A's right edge");
+            assert_eq!(x, 1919, "re-home at A's last right-edge pixel");
             // y ≈ 0.45 * 1080 ≈ 486
             assert!((y - 486).abs() <= 1, "re-home near current height, got {y}");
         }

@@ -1,13 +1,15 @@
 //! LAN device discovery.
 //!
-//! nexkvm auto-discovers peers on the local network so pairing is zero-config.
+//! nexkvm auto-discovers previously paired peers on the local network so trusted
+//! reconnect is zero-config after the explicit pairing ceremony.
 //! Two backends share one [`ServiceAnnouncement`] model and one TTL-based
 //! [`DiscoveryRegistry`]:
 //!
 //! - [`UdpDiscovery`] — UDP-broadcast (feature `udp-broadcast`, default).
 //!   Dependency-light and universal; great as a fallback.
-//! - [`MdnsDiscovery`] — mDNS/DNS-SD (feature `mdns`). The polished path that
-//!   integrates with Bonjour/Avahi; preferred where available.
+//! - [`MdnsDiscovery`] — optional mDNS/DNS-SD backend (feature `mdns`) that
+//!   integrates with Bonjour/Avahi. The current desktop release path explicitly
+//!   wires [`UdpDiscovery`].
 //!
 //! Both implement the [`Discovery`] trait so the rest of the platform consumes
 //! discovery events without binding to a specific backend. Discovered peers are
@@ -41,7 +43,7 @@ pub use proximity::{
     ProximitySnapshot,
 };
 pub use reconnect::{ReconnectPlanner, ReconnectPolicy, ReconnectTarget};
-pub use registry::{DEFAULT_TTL, DiscoveryRegistry};
+pub use registry::{DEFAULT_TTL, DiscoveryRegistry, MAX_DISCOVERED_PEERS};
 pub use service::{DiscoveryService, FingerprintAllowlist, ServiceConfig, TrustOracle};
 
 #[cfg(feature = "udp-broadcast")]

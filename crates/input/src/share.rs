@@ -328,8 +328,8 @@ mod tests {
         let out = ctrl.on_remote_motion(-0.5, 0.0); // 0.3 - 0.5 = -0.2 < 0 → return
         match out {
             ShareOutput::ReturnLocal { x, y } => {
-                // Re-home at the local right edge (x≈1919), mid-height.
-                assert_eq!(x, 1920); // denormalize rounds 1.0*1920
+                // Re-home at the last pixel of the local right edge, mid-height.
+                assert_eq!(x, 1919);
                 assert_eq!(y, 540);
             }
             other => panic!("expected ReturnLocal, got {other:?}"),

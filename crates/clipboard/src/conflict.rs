@@ -9,7 +9,7 @@
 //!   selection. A local change whose fingerprint matches what we last applied
 //!   (including content we just received) is *not* rebroadcast.
 //! - **Last-writer-wins** — each update carries an [`OriginStamp`] ordered by a
-//!   Lamport-style sequence, then wall-clock, then origin id as a deterministic
+//!   hybrid logical sequence, then wall-clock, then origin id as a deterministic
 //!   tie-breaker. A stale inbound update (older than what we hold) is rejected,
 //!   so all peers converge on the same selection regardless of arrival order.
 //!
@@ -26,7 +26,7 @@ use crate::content::ContentFingerprint;
 pub struct OriginStamp {
     /// Device that produced the selection.
     pub origin: DeviceId,
-    /// Lamport-style logical sequence (monotonic per mesh as seen locally).
+    /// Hybrid logical sequence (wall-time floor plus monotonic local advance).
     pub seq: u64,
     /// Wall-clock millis at production (tie-breaker / diagnostics only).
     pub at_millis: u64,
@@ -59,6 +59,8 @@ pub enum LocalDecision {
     Broadcast(OriginStamp),
     /// Suppress it: it merely echoes the selection we already hold.
     Suppress,
+    /// Refuse to mint a duplicate maximum sequence after clock exhaustion.
+    ClockExhausted,
 }
 
 /// Tracks the currently-held selection and assigns/orders stamps.
@@ -86,6 +88,17 @@ impl ConflictResolver {
         self.current.map(|(s, _)| s)
     }
 
+    /// Whether `fingerprint` is already the selection held by this resolver.
+    ///
+    /// Used by outbound orchestration to suppress an echo before performing
+    /// potentially expensive encoding and compression, without advancing state
+    /// before those fallible operations succeed.
+    #[must_use]
+    pub(crate) fn holds(&self, fingerprint: ContentFingerprint) -> bool {
+        self.current
+            .is_some_and(|(_, current)| current == fingerprint)
+    }
+
     /// Decide how to handle a locally observed clipboard change.
     ///
     /// `now_millis` is the current wall-clock used only for the stamp.
@@ -99,7 +112,15 @@ impl ConflictResolver {
         {
             return LocalDecision::Suppress;
         }
-        self.clock += 1;
+        // Use wall time as a floor for the logical sequence. Unlike a counter
+        // starting at one, this remains newer after an ordinary process restart
+        // while still advancing monotonically for multiple changes in one
+        // millisecond. Refuse exhaustion rather than panic, wrap, or mint the
+        // same maximum stamp for multiple different selections.
+        let Some(next) = self.clock.checked_add(1) else {
+            return LocalDecision::ClockExhausted;
+        };
+        self.clock = next.max(now_millis);
         let stamp = OriginStamp {
             origin: self.local,
             seq: self.clock,
@@ -121,7 +142,15 @@ impl ConflictResolver {
         self.clock = self.clock.max(stamp.seq);
 
         match self.current {
-            Some((_, fp)) if fp == fingerprint => InboundDecision::IgnoreEcho,
+            Some((current, fp)) if fp == fingerprint => {
+                // Echo suppression must not discard ordering information. If a
+                // newer peer stamp confirms the same content, retaining its
+                // stamp prevents a delayed, different value from being applied.
+                if stamp.supersedes(&current) {
+                    self.current = Some((stamp, fingerprint));
+                }
+                InboundDecision::IgnoreEcho
+            }
             Some((cur, _)) if cur.supersedes(&stamp) => InboundDecision::IgnoreStale,
             _ => {
                 self.current = Some((stamp, fingerprint));
@@ -220,5 +249,77 @@ mod tests {
         } else {
             panic!("expected broadcast");
         }
+    }
+
+    #[test]
+    fn newer_echo_advances_current_stamp() {
+        let mut resolver = ConflictResolver::new(dev());
+        let peer = dev();
+        let initial = OriginStamp {
+            origin: peer,
+            seq: 5,
+            at_millis: 10,
+        };
+        let newer_echo = OriginStamp {
+            origin: peer,
+            seq: 11,
+            at_millis: 11,
+        };
+        let delayed_different_value = OriginStamp {
+            origin: peer,
+            seq: 8,
+            at_millis: 12,
+        };
+
+        assert_eq!(resolver.on_inbound(initial, fp(1)), InboundDecision::Apply);
+        assert_eq!(
+            resolver.on_inbound(newer_echo, fp(1)),
+            InboundDecision::IgnoreEcho
+        );
+        assert_eq!(resolver.current_stamp(), Some(newer_echo));
+        assert_eq!(
+            resolver.on_inbound(delayed_different_value, fp(2)),
+            InboundDecision::IgnoreStale
+        );
+    }
+
+    #[test]
+    fn wall_clock_floor_keeps_a_restarted_sender_newer() {
+        let local = dev();
+        let mut before_restart = ConflictResolver::new(local);
+        let first = match before_restart.on_local_change(fp(1), 10_000) {
+            LocalDecision::Broadcast(stamp) => stamp,
+            other => panic!("first change must broadcast, got {other:?}"),
+        };
+        let before_restart_stamp = match before_restart.on_local_change(fp(2), 10_000) {
+            LocalDecision::Broadcast(stamp) => stamp,
+            other => panic!("different change must broadcast, got {other:?}"),
+        };
+        assert!(before_restart_stamp.supersedes(&first));
+
+        let mut after_restart = ConflictResolver::new(local);
+        let after_restart_stamp = match after_restart.on_local_change(fp(3), 10_001) {
+            LocalDecision::Broadcast(stamp) => stamp,
+            other => panic!("first post-restart change must broadcast, got {other:?}"),
+        };
+
+        assert!(
+            after_restart_stamp.supersedes(&before_restart_stamp),
+            "a fresh process must not restart its ordering sequence at one"
+        );
+    }
+
+    #[test]
+    fn maximum_remote_sequence_fails_closed_without_overflowing_local_clock() {
+        let mut resolver = ConflictResolver::new(dev());
+        let remote = OriginStamp {
+            origin: dev(),
+            seq: u64::MAX,
+            at_millis: 1,
+        };
+        assert_eq!(resolver.on_inbound(remote, fp(1)), InboundDecision::Apply);
+
+        let local = resolver.on_local_change(fp(2), 2);
+        assert_eq!(local, LocalDecision::ClockExhausted);
     }
 }

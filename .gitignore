@@ -1,4 +1,8 @@
 /target
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/dist/
 .DS_Store
 .idea
 .vscode

@@ -17,9 +17,16 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tracing::info;
 
+const EFFECTIVE_TRANSPORT: &str = "tcp";
+
 mod cli;
+mod clipboard_history;
+mod clipboard_runtime;
 mod connection;
+mod file_transfer;
+mod input_config;
 mod input_session;
+mod peer_session;
 #[cfg(test)]
 mod simulation;
 
@@ -47,12 +54,31 @@ async fn main() -> anyhow::Result<()> {
         Command::Devices => return list_devices(),
         Command::Pair { uri, accept } => return pair(&uri, accept),
         Command::PairingUri { addr } => return pairing_uri(&addr),
+        Command::ClipboardHistory { json } => return clipboard_history_list(json),
+        Command::ClipboardRestore { fingerprint } => {
+            return clipboard_history_restore(fingerprint).await;
+        }
+        Command::ClipboardClear => return clipboard_history_clear(),
+        Command::FileSend { paths } => return file_send(paths),
         Command::Simulate { path, json_only } => return simulate(path, json_only),
         Command::Help => {
             print!("{}", cli::help_text());
             return Ok(());
         }
     }
+}
+
+fn file_send(paths: Vec<String>) -> anyhow::Result<()> {
+    let config_path = config_path();
+    let config = Config::load(&config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+    let paths = paths
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    let transfer_id = file_transfer::enqueue_paths(&config_path, &config.file_transfer, &paths)?;
+    println!("queued file transfer {}", transfer_id.0);
+    Ok(())
 }
 
 /// Run the desktop daemon: foundation-phase wiring of telemetry, config, the
@@ -71,14 +97,25 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     // 2. Telemetry: install the tracing subscriber before anything else logs.
     nexkvm_telemetry::init(&config.telemetry).context("initializing telemetry")?;
 
+    if let Some(warning) = unsupported_transport_warning(&config.network.transports) {
+        tracing::warn!(%warning);
+    }
+
     info!(
         version = %PROTOCOL_VERSION,
         supported = %VersionRange::current(),
         "starting nexkvm daemon"
     );
 
-    // 3. Identity for this device.
-    let device = DeviceInfo::new(config.device.name.clone(), current_os());
+    // 3. Identity for this device. The routing id is deterministically bound to
+    // the persisted signing key so topology/history attribution survives restarts.
+    let local_identity = load_local_identity(&config_path, &config.device.name)?;
+    let local_public_key = local_identity.public_key();
+    let device = DeviceInfo {
+        id: stable_device_id(&local_public_key),
+        name: config.device.name.clone(),
+        os: current_os(),
+    };
     info!(id = %device.id, name = %device.name, os = ?device.os, "device identity");
 
     // 4. Event bus — the in-process backbone subsystems attach to.
@@ -97,7 +134,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
     info!(
         listen_port = config.network.listen_port,
         discovery = config.network.enable_discovery,
-        require_pairing = config.security.require_pairing,
+        pairing_policy = "required (authenticated trusted peers only)",
         "configuration loaded"
     );
 
@@ -130,13 +167,23 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         "input runtime plan"
     );
     let input_handoff_edge = input_handoff_edge(config.input.handoff_edge);
+    let input_handoff_edges =
+        input_config::spawn_input_handoff_reload(config_path.clone(), input_handoff_edge);
+    let active_peer_selection = resolve_active_peer_selection(config.input.active_peer.as_deref());
+    let input_tasks = input_session::InputTaskSupervisor::new();
     let input_peer_handler = input_peer_handler(
-        input_plan,
-        input_can_capture,
-        input_can_inject,
-        input_handoff_edge,
-        config.input.emergency_stop_keycode,
-        config.input.remote_focus_timeout_millis,
+        InputPeerRuntimeConfig {
+            plan: input_plan,
+            capture_ready: input_can_capture,
+            inject_ready: input_can_inject,
+            forwarding: input_session::InputForwardingConfig {
+                emergency_stop_keycode: config.input.emergency_stop_keycode,
+                remote_focus_timeout_millis: config.input.remote_focus_timeout_millis,
+            },
+        },
+        input_handoff_edges,
+        active_peer_selection.clone(),
+        input_tasks.clone(),
     );
     let clipboard_can_access = {
         #[cfg(target_os = "macos")]
@@ -152,22 +199,35 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
                 .unwrap_or(false)
         }
     };
+    let clipboard_history =
+        clipboard_history::ClipboardHistoryRecorder::open(&config_path, &config.clipboard)
+            .context("opening encrypted clipboard history")?;
+    let _clipboard_history_task =
+        start_clipboard_history_runtime(clipboard_can_access, clipboard_history.clone(), device.id);
     let clipboard_peer_handler = create_clipboard_peer_handler(
         clipboard_runtime_enabled(config.clipboard.sync_enabled, clipboard_can_access),
         device.id,
+        clipboard_history,
+        active_peer_selection.clone(),
+    );
+    let file_transfer_peer_handler = file_transfer::create_peer_handler(
+        config_path.clone(),
+        config.file_transfer.clone(),
+        device.id,
+        active_peer_selection,
     );
     let trusted_peer_keys = trusted_public_keys();
-    let local_identity = load_local_identity(&config_path, &config.device.name)?;
-    let local_fingerprint = local_identity.public_key().fingerprint();
-    let session_config = connection::TrustedSessionConfig::new(
-        local_identity,
-        local_handshake_challenge(&config.device.name),
-        trusted_peer_keys,
-    );
+    let local_fingerprint = local_public_key.fingerprint();
+    let session_config = connection::TrustedSessionConfig::new(local_identity, trusted_peer_keys);
 
     // Create handlers once at the top level so they can be used in all spawn sites
-    let peer_handlers =
-        merge_peer_handlers(input_peer_handler.clone(), clipboard_peer_handler.clone());
+    let peer_handlers = merge_peer_handlers(
+        local_public_key.clone(),
+        input_peer_handler.clone(),
+        input_plan.start_inject_receiver,
+        clipboard_peer_handler.clone(),
+        file_transfer_peer_handler.clone(),
+    );
 
     // 6. Cross-platform TCP transport: universal desktop fallback for inbound
     //    and trusted rediscovery connections.
@@ -239,14 +299,63 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         None
     };
 
-    // 8. Run until Ctrl-C, then signal a graceful shutdown on the bus.
-    tokio::signal::ctrl_c()
-        .await
-        .context("waiting for shutdown signal")?;
-    info!("shutdown requested");
+    // 8. Run until the terminal or GUI requests a graceful shutdown.
+    let shutdown_signal = wait_for_shutdown_signal().await?;
+    info!(?shutdown_signal, "shutdown requested");
     bus.publish(nexkvm_core::Event::Shutdown);
+    if !input_tasks
+        .shutdown(std::time::Duration::from_secs(3))
+        .await
+    {
+        tracing::warn!("input runtime cleanup exceeded the shutdown deadline");
+    }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownSignal {
+    Interrupt,
+    #[cfg(unix)]
+    Terminate,
+}
+
+fn configured_shutdown_signals() -> &'static [ShutdownSignal] {
+    #[cfg(unix)]
+    {
+        &[ShutdownSignal::Interrupt, ShutdownSignal::Terminate]
+    }
+    #[cfg(not(unix))]
+    {
+        &[ShutdownSignal::Interrupt]
+    }
+}
+
+async fn wait_for_shutdown_signal() -> anyhow::Result<ShutdownSignal> {
+    tracing::debug!(signals = ?configured_shutdown_signals(), "shutdown handlers configured");
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .context("installing SIGTERM shutdown handler")?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.context("waiting for Ctrl-C shutdown signal")?;
+                Ok(ShutdownSignal::Interrupt)
+            }
+            received = terminate.recv() => {
+                received.context("SIGTERM shutdown stream ended unexpectedly")?;
+                Ok(ShutdownSignal::Terminate)
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .context("waiting for Ctrl-C shutdown signal")?;
+        Ok(ShutdownSignal::Interrupt)
+    }
 }
 
 fn input_runtime_role(role: nexkvm_storage::InputControlRole) -> input_session::InputRuntimeRole {
@@ -276,135 +385,282 @@ fn storage_input_edge_label(edge: nexkvm_storage::InputHandoffEdge) -> &'static 
     }
 }
 
-fn input_peer_handler(
+#[derive(Debug, Clone, Copy)]
+struct InputPeerRuntimeConfig {
     plan: input_session::InputRuntimePlan,
     capture_ready: bool,
     inject_ready: bool,
-    handoff_edge: input_session::HandoffEdge,
-    emergency_stop_keycode: u32,
-    remote_focus_timeout_millis: u64,
+    forwarding: input_session::InputForwardingConfig,
+}
+
+fn input_peer_handler(
+    config: InputPeerRuntimeConfig,
+    handoff_edges: tokio::sync::watch::Receiver<input_session::HandoffEdge>,
+    active_peer: ActivePeerSelection,
+    task_supervisor: input_session::InputTaskSupervisor,
 ) -> Option<connection::PeerConnectionHandler> {
-    if !plan.start_inject_receiver && !plan.start_capture_forwarder {
+    if !config.plan.start_inject_receiver && !config.plan.start_capture_forwarder {
         return None;
     }
     #[cfg(target_os = "macos")]
     {
-        let injector = if plan.start_inject_receiver {
-            Some(nexkvm_platform_macos::MacosInputInjector::new(inject_ready))
+        let injector = if config.plan.start_inject_receiver {
+            Some(nexkvm_platform_macos::MacosInputInjector::new(
+                config.inject_ready,
+            ))
         } else {
             None
         };
-        let capture = if plan.start_capture_forwarder {
-            Some(nexkvm_platform_macos::MacosInputCapture::new(capture_ready))
+        let capture = if config.plan.start_capture_forwarder {
+            Some(nexkvm_platform_macos::MacosInputCapture::new(
+                config.capture_ready,
+            ))
         } else {
             None
         };
         let input_forwarder_gate = Arc::new(input_session::InputForwarderGate::default());
-        let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
-            let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
-            if let Some(injector) = injector.clone() {
-                let connection = Arc::clone(&connection);
-                tokio::spawn(async move {
-                    if let Err(error) =
-                        input_session::inject_until_closed(&*connection, &injector).await
-                    {
-                        tracing::warn!(%error, "input injection session ended");
-                    }
-                });
-            }
-            if let Some(capture) = capture.clone() {
-                let connection = Arc::clone(&connection);
-                let input_forwarder_gate = Arc::clone(&input_forwarder_gate);
-                tokio::spawn(async move {
-                    let Some(_lease) = input_forwarder_gate.try_acquire() else {
-                        tracing::debug!("input capture already belongs to another peer connection");
-                        return;
-                    };
+        let handler: connection::PeerConnectionHandler =
+            Arc::new(move |connection, mut context| {
+                if !active_peer.allows(connection.peer_identity().as_ref()) {
+                    tracing::warn!(
+                        configured_peer = %active_peer.label(),
+                        peer = %connection.peer_addr(),
+                        "input lane rejected because this is not the selected trusted peer"
+                    );
+                    return;
+                }
+                let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
+                let forwarder_lease = capture
+                    .as_ref()
+                    .and_then(|_| input_forwarder_gate.try_acquire());
+                if capture.is_some() && forwarder_lease.is_none() {
+                    tracing::warn!(
+                        peer = %connection.peer_addr(),
+                        "duplicate input connection rejected; closing its physical session"
+                    );
+                    let connection = Arc::clone(&connection);
+                    task_supervisor.spawn(async move {
+                        input_session::close_input_connection(&*connection).await;
+                    });
+                    return;
+                }
+                if let Some(injector) = injector.clone() {
+                    let connection = Arc::clone(&connection);
+                    let shutdown = task_supervisor.subscribe();
+                    task_supervisor.spawn(async move {
+                        if let Err(error) =
+                            input_session::inject_until_shutdown(&*connection, &injector, shutdown)
+                                .await
+                        {
+                            tracing::warn!(%error, "input injection session ended");
+                        }
+                    });
+                }
+                if let (Some(capture), Some(lease)) = (capture.clone(), forwarder_lease) {
+                    let connection = Arc::clone(&connection);
+                    let handoff_edges = handoff_edges.clone();
+                    let shutdown = task_supervisor.subscribe();
+                    task_supervisor.spawn(async move {
+                    let _lease = lease;
                     let capture_for_suppression = capture.clone();
-                    if let Err(error) = input_session::forward_extended_until_error(
-                        &capture,
-                        &*connection,
-                        MessageId(0),
-                        handoff_edge,
-                        emergency_stop_keycode,
-                        remote_focus_timeout_millis,
-                        move |suppressed| capture_for_suppression.set_suppressed(suppressed),
-                    )
-                    .await
-                    {
-                        handle_input_capture_end(error);
+                    let forward = async move {
+                        capture.discard_pending().await;
+                        input_session::forward_reconfigurable_until_shutdown(
+                            &capture,
+                            &*connection,
+                            MessageId(0),
+                            handoff_edges,
+                            shutdown,
+                            config.forwarding,
+                            move |suppressed| capture_for_suppression.set_suppressed(suppressed),
+                        )
+                        .await
+                    };
+                    tokio::select! {
+                        result = forward => {
+                            if let Err(error) = result {
+                                handle_input_capture_end(error);
+                            }
+                        }
+                        () = context.wait_for_session_end() => {
+                            tracing::debug!("input capture released after physical session end");
+                        }
                     }
                 });
-            }
-        });
+                }
+            });
         Some(handler)
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = (capture_ready, inject_ready);
-        let injector = if plan.start_inject_receiver {
+        let injector = if config.plan.start_inject_receiver {
             Some(nexkvm_platform_windows::WindowsInputInjector::new())
         } else {
             None
         };
-        let capture = if plan.start_capture_forwarder {
+        let capture = if config.plan.start_capture_forwarder {
             Some(nexkvm_platform_windows::WindowsInputCapture::new())
         } else {
             None
         };
         let input_forwarder_gate = Arc::new(input_session::InputForwarderGate::default());
-        let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
-            let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
-            if let Some(injector) = injector.clone() {
-                let connection = Arc::clone(&connection);
-                tokio::spawn(async move {
-                    if let Err(error) =
-                        input_session::inject_until_closed(&*connection, &injector).await
-                    {
-                        tracing::warn!(%error, "Windows input injection session ended");
-                    }
-                });
-            }
-            if let Some(capture) = capture.clone() {
-                let connection = Arc::clone(&connection);
-                let input_forwarder_gate = Arc::clone(&input_forwarder_gate);
-                tokio::spawn(async move {
-                    let Some(_lease) = input_forwarder_gate.try_acquire() else {
-                        tracing::debug!("input capture already belongs to another peer connection");
-                        return;
-                    };
+        let handler: connection::PeerConnectionHandler = Arc::new(
+            move |connection, mut context| {
+                if !active_peer.allows(connection.peer_identity().as_ref()) {
+                    tracing::warn!(
+                        configured_peer = %active_peer.label(),
+                        peer = %connection.peer_addr(),
+                        "input lane rejected because this is not the selected trusted peer"
+                    );
+                    return;
+                }
+                let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
+                let forwarder_lease = capture
+                    .as_ref()
+                    .and_then(|_| input_forwarder_gate.try_acquire());
+                if capture.is_some() && forwarder_lease.is_none() {
+                    tracing::warn!(
+                        peer = %connection.peer_addr(),
+                        "duplicate input connection rejected; closing its physical session"
+                    );
+                    let connection = Arc::clone(&connection);
+                    task_supervisor.spawn(async move {
+                        input_session::close_input_connection(&*connection).await;
+                    });
+                    return;
+                }
+                if let Some(injector) = injector.clone() {
+                    let connection = Arc::clone(&connection);
+                    let shutdown = task_supervisor.subscribe();
+                    task_supervisor.spawn(async move {
+                        if let Err(error) =
+                            input_session::inject_until_shutdown(&*connection, &injector, shutdown)
+                                .await
+                        {
+                            tracing::warn!(%error, "Windows input injection session ended");
+                        }
+                    });
+                }
+                if let (Some(capture), Some(lease)) = (capture.clone(), forwarder_lease) {
+                    let connection = Arc::clone(&connection);
+                    let handoff_edges = handoff_edges.clone();
+                    let shutdown = task_supervisor.subscribe();
+                    task_supervisor.spawn(async move {
+                    let _lease = lease;
                     let capture_for_suppression = capture.clone();
-                    if let Err(error) = input_session::forward_extended_until_error(
+                    let forward = input_session::forward_reconfigurable_until_shutdown(
                         &capture,
                         &*connection,
                         MessageId(0),
-                        handoff_edge,
-                        emergency_stop_keycode,
-                        remote_focus_timeout_millis,
+                        handoff_edges,
+                        shutdown,
+                        config.forwarding,
                         move |suppressed| capture_for_suppression.set_suppressed(suppressed),
-                    )
-                    .await
-                    {
-                        handle_input_capture_end(error);
+                    );
+                    tokio::select! {
+                        result = forward => {
+                            if let Err(error) = result {
+                                handle_input_capture_end(error);
+                            }
+                        }
+                        () = context.wait_for_session_end() => {
+                            tracing::debug!("Windows input capture released after physical session end");
+                        }
                     }
                 });
-            }
-        });
+                }
+            },
+        );
         Some(handler)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (capture_ready, inject_ready);
+        let _ = (config, handoff_edges, active_peer, task_supervisor);
         None
     }
 }
 
+#[derive(Debug, Clone)]
+enum ActivePeerSelection {
+    AnyTrusted,
+    Only(nexkvm_crypto::PublicKey),
+    Unresolved(String),
+}
+
+impl ActivePeerSelection {
+    fn allows(&self, peer: Option<&nexkvm_crypto::PublicKey>) -> bool {
+        match (self, peer) {
+            (Self::AnyTrusted, Some(_)) => true,
+            (Self::Only(expected), Some(actual)) => expected == actual,
+            (Self::AnyTrusted | Self::Only(_) | Self::Unresolved(_), None)
+            | (Self::Unresolved(_), Some(_)) => false,
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Self::AnyTrusted => "auto",
+            Self::Only(_) => "selected trusted peer",
+            Self::Unresolved(label) => label,
+        }
+    }
+}
+
+fn resolve_active_peer_selection(active_peer: Option<&str>) -> ActivePeerSelection {
+    use nexkvm_storage::FileTrustStore;
+
+    let Some(label) = active_peer.map(str::trim).filter(|label| !label.is_empty()) else {
+        return ActivePeerSelection::AnyTrusted;
+    };
+    let Ok(store) = FileTrustStore::load(trust_path()) else {
+        return ActivePeerSelection::Unresolved(label.into());
+    };
+    let entries = store.entries();
+    resolve_active_peer_from_entries(label, &entries)
+}
+
+fn resolve_active_peer_from_entries(
+    label: &str,
+    entries: &[nexkvm_crypto::TrustEntry],
+) -> ActivePeerSelection {
+    if let Some(entry) = entries.iter().find(|entry| {
+        entry.display_name.eq_ignore_ascii_case(label)
+            || entry.public_key.fingerprint().eq_ignore_ascii_case(label)
+    }) {
+        return ActivePeerSelection::Only(entry.public_key.clone());
+    }
+    ActivePeerSelection::Unresolved(label.into())
+}
+
 fn merge_peer_handlers(
+    local_identity: nexkvm_crypto::PublicKey,
     input: Option<connection::PeerConnectionHandler>,
+    input_receives: bool,
     clipboard: Option<connection::PeerConnectionHandler>,
+    file_transfer: Option<connection::PeerConnectionHandler>,
 ) -> Option<connection::PeerConnectionHandler> {
-    // Prefer input handler; clipboard will be handled separately
-    input.or(clipboard)
+    let mut lanes = Vec::new();
+    if let Some(input) = input {
+        let inbound = if input_receives {
+            vec![nexkvm_protocol::MessageKind::Input]
+        } else {
+            Vec::new()
+        };
+        lanes.push(peer_session::PeerLaneHandler::new(input, inbound));
+    }
+    if let Some(clipboard) = clipboard {
+        lanes.push(peer_session::PeerLaneHandler::new(
+            clipboard,
+            [nexkvm_protocol::MessageKind::Clipboard],
+        ));
+    }
+    if let Some(file_transfer) = file_transfer {
+        lanes.push(peer_session::PeerLaneHandler::new(
+            file_transfer,
+            [nexkvm_protocol::MessageKind::FileTransfer],
+        ));
+    }
+    peer_session::compose_peer_handler(local_identity, lanes)
 }
 
 fn clipboard_runtime_enabled(sync_enabled: bool, can_access_clipboard: bool) -> bool {
@@ -414,156 +670,253 @@ fn clipboard_runtime_enabled(sync_enabled: bool, can_access_clipboard: bool) -> 
 fn create_clipboard_peer_handler(
     can_access_clipboard: bool,
     local_device_id: nexkvm_core::DeviceId,
+    history: Option<clipboard_history::ClipboardHistoryRecorder>,
+    active_peer: ActivePeerSelection,
 ) -> Option<connection::PeerConnectionHandler> {
     if !can_access_clipboard {
         return None;
     }
     #[cfg(target_os = "macos")]
     {
-        use nexkvm_clipboard::{Clipboard, ClipboardSync, PlaintextCipher};
-        use std::sync::Mutex;
-
         let clipboard = Arc::new(nexkvm_platform_macos::MacosClipboard::new());
-        // Clipboard sync is opt-in for the input alpha and still uses the existing
-        // clipboard state machine until the dedicated clipboard release slice.
-        let sync = Arc::new(Mutex::new(ClipboardSync::new(
-            local_device_id,
-            Box::new(PlaintextCipher),
-        )));
+        let gate = Arc::new(clipboard_runtime::ClipboardPeerGate::default());
 
-        let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
-            let connection: Arc<dyn nexkvm_network::Connection> =
-                Arc::<dyn nexkvm_network::Connection>::from(connection);
-            let clipboard_read = Arc::clone(&clipboard);
-            let clipboard_write = Arc::clone(&clipboard);
-            let sync_poll = Arc::clone(&sync);
-            let conn_send = Arc::clone(&connection);
-            let conn_recv = Arc::clone(&connection);
+        let handler: connection::PeerConnectionHandler = Arc::new(move |connection, _context| {
+            let Some(peer_identity) = connection.peer_identity() else {
+                tracing::warn!(
+                    peer = %connection.peer_addr(),
+                    "clipboard lane rejected an unauthenticated connection"
+                );
+                tokio::spawn(async move {
+                    let _ = connection.close().await;
+                });
+                return;
+            };
+            if !active_peer.allows(Some(&peer_identity)) {
+                tracing::warn!(
+                    configured_peer = %active_peer.label(),
+                    peer = %connection.peer_addr(),
+                    "clipboard lane rejected because this is not the selected trusted peer"
+                );
+                tokio::spawn(async move {
+                    let _ = connection.close().await;
+                });
+                return;
+            }
+            let authenticated_peer = stable_device_id(&peer_identity);
+            if authenticated_peer == local_device_id {
+                tracing::warn!("clipboard lane rejected a self-identity connection");
+                tokio::spawn(async move {
+                    let _ = connection.close().await;
+                });
+                return;
+            }
+            let Some(lease) = gate.try_acquire(peer_identity) else {
+                tracing::debug!(
+                    peer = %connection.peer_addr(),
+                    "clipboard lane already belongs to another authenticated connection"
+                );
+                tokio::spawn(async move {
+                    let _ = connection.close().await;
+                });
+                return;
+            };
 
-            // Poll local clipboard periodically
+            let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
+            let clipboard = Arc::clone(&clipboard);
+            let history = history.clone();
             tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-                    match clipboard_read.read().await {
-                        Ok(Some(snapshot)) => {
-                            let now_millis = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0);
-
-                            // Prepare the update via the sync state machine
-                            let update_result = match sync_poll.lock() {
-                                Ok(mut s) => s.prepare_outbound(&snapshot, now_millis),
-                                Err(_) => {
-                                    tracing::warn!("clipboard sync lock poisoned");
-                                    continue;
-                                }
-                            };
-
-                            match update_result {
-                                Ok(Some(update)) => {
-                                    // Encode the update
-                                    match update.encode() {
-                                        Ok(body) => {
-                                            let envelope = nexkvm_protocol::Envelope::new(
-                                                nexkvm_protocol::PROTOCOL_VERSION,
-                                                nexkvm_protocol::MessageId(0),
-                                                nexkvm_protocol::MessageKind::Clipboard,
-                                                body,
-                                            );
-                                            if let Err(e) = conn_send.send(envelope).await {
-                                                tracing::warn!("clipboard send failed: {}", e);
-                                                break;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("clipboard update encode failed: {}", e);
-                                        }
-                                    }
-                                }
-                                Ok(None) => {
-                                    // Echo suppression or duplicate
-                                    tracing::debug!("clipboard update suppressed (echo/duplicate)");
-                                }
-                                Err(e) => {
-                                    tracing::warn!("clipboard prepare_outbound failed: {}", e);
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            // Empty clipboard
-                        }
-                        Err(e) => {
-                            tracing::warn!("clipboard read failed: {}", e);
-                        }
-                    }
+                let result = clipboard_runtime::run_peer_session(
+                    clipboard,
+                    Arc::clone(&connection),
+                    local_device_id,
+                    authenticated_peer,
+                    history,
+                )
+                .await;
+                if let Err(error) = result {
+                    tracing::warn!(%error, "clipboard peer session ended");
                 }
-            });
-
-            // Receive remote clipboard updates
-            let sync_recv = Arc::clone(&sync);
-            tokio::spawn(async move {
-                loop {
-                    match conn_recv.recv().await {
-                        Ok(envelope) => {
-                            if envelope.kind != nexkvm_protocol::MessageKind::Clipboard {
-                                continue;
-                            }
-
-                            // Decode the update
-                            match nexkvm_clipboard::ClipboardUpdate::decode(envelope.body) {
-                                Ok(update) => {
-                                    // Apply the update via the sync state machine
-                                    let snapshot_result = match sync_recv.lock() {
-                                        Ok(mut s) => s.accept_inbound(update),
-                                        Err(_) => {
-                                            tracing::warn!("clipboard sync lock poisoned");
-                                            continue;
-                                        }
-                                    };
-
-                                    match snapshot_result {
-                                        Ok(Some(snapshot)) => {
-                                            // Write the snapshot to the clipboard
-                                            if let Err(e) = clipboard_write.write(snapshot).await {
-                                                tracing::warn!("clipboard write failed: {}", e);
-                                            }
-                                        }
-                                        Ok(None) => {
-                                            // Stale or echo, ignore
-                                            tracing::debug!(
-                                                "clipboard update ignored (stale/echo)"
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "clipboard accept_inbound failed: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("clipboard update decode failed: {}", e);
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            tracing::info!("clipboard connection closed");
-                            break;
-                        }
-                    }
+                if let Err(error) = connection.close().await
+                    && !matches!(error, nexkvm_network::NetworkError::Closed)
+                {
+                    tracing::debug!(%error, "clipboard connection close failed");
                 }
+                drop(lease);
             });
         });
         Some(handler)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = local_device_id;
+        let _ = (local_device_id, history, active_peer);
         None
     }
+}
+
+fn start_clipboard_history_runtime(
+    can_access_clipboard: bool,
+    history: Option<clipboard_history::ClipboardHistoryRecorder>,
+    local_device_id: nexkvm_core::DeviceId,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !can_access_clipboard {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        history.map(|history| {
+            clipboard_history::spawn_local_history_poll(
+                Arc::new(nexkvm_platform_macos::MacosClipboard::new()),
+                history,
+                local_device_id,
+            )
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (history, local_device_id);
+        None
+    }
+}
+
+fn clipboard_history_list(json: bool) -> anyhow::Result<()> {
+    let config_path = config_path();
+    let config = Config::load(&config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+    if !config.clipboard.history_enabled {
+        if json {
+            println!("[]");
+        } else {
+            println!("clipboard history is disabled");
+        }
+        return Ok(());
+    }
+    let path = clipboard_history::archive_path(&config_path);
+    if !path.exists() {
+        if json {
+            println!("[]");
+        } else {
+            println!("clipboard history is empty");
+        }
+        return Ok(());
+    }
+    let archive = nexkvm_storage::ClipboardHistoryArchive::open(
+        path,
+        clipboard_history::archive_config(&config.clipboard),
+    )
+    .context("opening encrypted clipboard history")?;
+
+    if json {
+        let entries: Vec<_> = archive
+            .entries()
+            .map(|entry| {
+                serde_json::json!({
+                    "fingerprint": format!("{:016x}", entry.fingerprint().0),
+                    "preview": clipboard_preview(&entry.snapshot, 240),
+                    "origin": entry.origin.to_string(),
+                    "at_millis": entry.at_millis,
+                    "pinned": entry.pinned,
+                    "bytes": entry.snapshot.total_len(),
+                    "formats": entry.snapshot.formats().len(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&entries)?);
+        return Ok(());
+    }
+
+    let mut count = 0usize;
+    for entry in archive.entries() {
+        count += 1;
+        println!(
+            "{:016x}  {}  {} bytes  origin={}  at={}",
+            entry.fingerprint().0,
+            clipboard_preview(&entry.snapshot, 80),
+            entry.snapshot.total_len(),
+            entry.origin,
+            entry.at_millis,
+        );
+    }
+    if count == 0 {
+        println!("clipboard history is empty");
+    }
+    Ok(())
+}
+
+async fn clipboard_history_restore(fingerprint: u64) -> anyhow::Result<()> {
+    let config_path = config_path();
+    let config = Config::load(&config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+    anyhow::ensure!(
+        config.clipboard.history_enabled,
+        "clipboard history is disabled"
+    );
+    let path = clipboard_history::archive_path(&config_path);
+    anyhow::ensure!(path.exists(), "clipboard history is empty");
+    let archive = nexkvm_storage::ClipboardHistoryArchive::open(
+        path,
+        clipboard_history::archive_config(&config.clipboard),
+    )
+    .context("opening encrypted clipboard history")?;
+    let snapshot = archive
+        .entries()
+        .find(|entry| entry.fingerprint().0 == fingerprint)
+        .map(|entry| entry.snapshot.clone())
+        .ok_or_else(|| anyhow::anyhow!("clipboard history entry was not found"))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        use nexkvm_clipboard::Clipboard;
+        nexkvm_platform_macos::MacosClipboard::new()
+            .write(snapshot)
+            .await
+            .context("restoring the macOS clipboard")?;
+        println!("clipboard history entry restored");
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = snapshot;
+        anyhow::bail!("clipboard history restore is currently available on macOS")
+    }
+}
+
+fn clipboard_history_clear() -> anyhow::Result<()> {
+    let config_path = config_path();
+    let config = Config::load(&config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+    anyhow::ensure!(
+        config.clipboard.history_enabled,
+        "clipboard history is disabled"
+    );
+    let path = clipboard_history::archive_path(&config_path);
+    if !path.exists() {
+        println!("clipboard history is already empty");
+        return Ok(());
+    }
+    clipboard_history::clear_unpinned(&config_path, &config.clipboard)
+        .context("clearing encrypted clipboard history")?;
+    println!("unpinned clipboard history cleared");
+    Ok(())
+}
+
+fn clipboard_preview(snapshot: &nexkvm_clipboard::ClipboardSnapshot, max_chars: usize) -> String {
+    let text = snapshot.best_text().unwrap_or("[non-text clipboard item]");
+    let mut preview: String = text
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(max_chars)
+        .collect();
+    if text.chars().count() > max_chars {
+        preview.push('…');
+    }
+    preview
 }
 
 fn handle_input_capture_end(error: input_session::InputSessionError) {
@@ -718,30 +1071,69 @@ fn pair(uri: &str, accept: bool) -> anyhow::Result<()> {
 /// Generate this device's pairing bootstrap URI.
 fn pairing_uri(addr: &str) -> anyhow::Result<()> {
     use nexkvm_crypto::PairingBootstrap;
-    use sha2::{Digest, Sha256};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
+    let addr = validate_pairing_address(addr)?;
     let config_path = config_path();
     let config = Config::load(&config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
 
     let public_key = load_local_identity(&config_path, &config.device.name)?.public_key();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before Unix epoch")?
-        .as_nanos();
-    let mut hasher = Sha256::new();
-    hasher.update(b"nexkvm pairing nonce v1");
-    hasher.update(config.device.name.as_bytes());
-    hasher.update(addr.as_bytes());
-    hasher.update(now.to_be_bytes());
-    let digest = hasher.finalize();
-    let mut nonce = [0u8; nexkvm_crypto::NONCE_LEN];
-    nonce.copy_from_slice(&digest);
+    let nonce = fresh_pairing_nonce()?;
 
-    let bootstrap = PairingBootstrap::new(config.device.name, public_key, nonce, addr);
-    println!("{}", bootstrap.to_uri());
+    let bootstrap = PairingBootstrap::new(config.device.name, public_key, nonce, addr.to_string());
+    println!("{}", bootstrap.to_uri()?);
     Ok(())
+}
+
+fn validate_pairing_address(addr: &str) -> anyhow::Result<SocketAddr> {
+    const REQUIREMENT: &str =
+        "pairing address must be a reachable non-loopback unicast IP:port for this Mac";
+
+    let addr: SocketAddr = addr
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!(REQUIREMENT))?;
+    let ip = addr.ip();
+    let is_broadcast = match ip {
+        std::net::IpAddr::V4(ip) => ip.is_broadcast(),
+        std::net::IpAddr::V6(_) => false,
+    };
+    anyhow::ensure!(
+        addr.port() != 0
+            && !ip.is_loopback()
+            && !ip.is_unspecified()
+            && !ip.is_multicast()
+            && !is_broadcast,
+        REQUIREMENT
+    );
+    Ok(addr)
+}
+
+fn unsupported_transport_warning(configured: &[String]) -> Option<String> {
+    let mut unsupported = configured
+        .iter()
+        .map(|transport| transport.trim())
+        .filter(|transport| {
+            !transport.is_empty() && !transport.eq_ignore_ascii_case(EFFECTIVE_TRANSPORT)
+        })
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    unsupported.sort_unstable();
+    unsupported.dedup();
+    (!unsupported.is_empty()).then(|| {
+        format!(
+            "unsupported configured transports ignored: {}; effective transport: {EFFECTIVE_TRANSPORT}",
+            unsupported.join(",")
+        )
+    })
+}
+
+fn fresh_pairing_nonce() -> anyhow::Result<[u8; nexkvm_crypto::NONCE_LEN]> {
+    let mut nonce = [0u8; nexkvm_crypto::NONCE_LEN];
+    getrandom::fill(&mut nonce).map_err(|error| {
+        anyhow::anyhow!("generating a cryptographically secure pairing nonce: {error}")
+    })?;
+    Ok(nonce)
 }
 
 fn load_local_identity(
@@ -756,22 +1148,19 @@ fn load_local_identity(
         .with_context(|| format!("loading local identity from {}", path.display()))
 }
 
-fn local_handshake_challenge(device_name: &str) -> [u8; 32] {
+fn stable_device_id(public_key: &nexkvm_crypto::PublicKey) -> nexkvm_core::DeviceId {
     use sha2::{Digest, Sha256};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
     let mut hasher = Sha256::new();
-    hasher.update(b"nexkvm trusted session challenge v1");
-    hasher.update(device_name.as_bytes());
-    hasher.update(now.to_be_bytes());
+    hasher.update(b"nexkvm stable device id v1");
+    hasher.update(public_key.as_bytes());
     let digest = hasher.finalize();
-    let mut challenge = [0u8; 32];
-    challenge.copy_from_slice(&digest);
-    challenge
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // RFC 9562 variant plus UUIDv8 (application-defined) version bits.
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    nexkvm_core::DeviceId(uuid::Uuid::from_bytes(bytes))
 }
 
 fn doctor() -> anyhow::Result<()> {
@@ -787,8 +1176,11 @@ fn doctor() -> anyhow::Result<()> {
         "  explicit connect: {}",
         config.network.connect_addr.as_deref().unwrap_or("disabled")
     );
-    println!("  transports: {}", config.network.transports.join(","));
-    println!("  require pairing: {}", config.security.require_pairing);
+    println!("  effective transport: {EFFECTIVE_TRANSPORT}");
+    if let Some(warning) = unsupported_transport_warning(&config.network.transports) {
+        println!("  {warning}");
+    }
+    println!("  pairing policy: required (authenticated trusted peers only)");
     for line in cli::format_input_alpha_runtime(
         storage_input_role_label(config.input.control_role),
         config.input.active_peer.as_deref(),
@@ -841,21 +1233,8 @@ fn doctor() -> anyhow::Result<()> {
         {
             println!("  {line}");
         }
-        if !report.can_capture_input || !report.can_inject_input {
-            open_macos_accessibility_settings();
-            println!(
-                "  opened settings: add nexkvm.app or the terminal app you use, then restart nexkvm"
-            );
-        }
     }
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn open_macos_accessibility_settings() {
-    let _ = std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-        .status();
 }
 
 async fn permissions() -> anyhow::Result<()> {
@@ -1497,8 +1876,7 @@ fn print_latency_simulator(network: &SimNetwork) {
         .as_millis();
 
     println!(
-        "    - latency: smoothed={}ms jitter={}ms timeout={}ms",
-        smoothed, estimated_jitter, timeout,
+        "    - latency: smoothed={smoothed}ms jitter={estimated_jitter}ms timeout={timeout}ms"
     );
 }
 
@@ -1991,7 +2369,7 @@ fn simulate(path: Option<String>, json_only: bool) -> anyhow::Result<()> {
         config.features.plugins,
     );
     print_simulator_report(&runtime_devices, &config.network);
-    println!("  simulation_report_json: {}", machine_report);
+    println!("  simulation_report_json: {machine_report}");
     println!("  bytes: {}", text.len());
     println!("  status: typed TOML parsed and validated");
     Ok(())
@@ -2084,5 +2462,55 @@ mod tests {
         assert!(!clipboard_runtime_enabled(false, true));
         assert!(!clipboard_runtime_enabled(true, false));
         assert!(clipboard_runtime_enabled(true, true));
+    }
+
+    #[test]
+    fn stable_device_id_is_bound_to_the_persisted_identity_key() {
+        let first = nexkvm_crypto::DeviceKeypair::from_seed([1; 32]).public_key();
+        let same = nexkvm_crypto::DeviceKeypair::from_seed([1; 32]).public_key();
+        let other = nexkvm_crypto::DeviceKeypair::from_seed([2; 32]).public_key();
+
+        assert_eq!(stable_device_id(&first), stable_device_id(&same));
+        assert_ne!(stable_device_id(&first), stable_device_id(&other));
+    }
+
+    #[test]
+    fn configured_active_peer_rejects_other_authenticated_connections() {
+        let selected = nexkvm_crypto::DeviceKeypair::from_seed([1; 32]).public_key();
+        let other = nexkvm_crypto::DeviceKeypair::from_seed([2; 32]).public_key();
+        let policy = ActivePeerSelection::Only(selected.clone());
+
+        assert!(policy.allows(Some(&selected)));
+        assert!(!policy.allows(Some(&other)));
+        assert!(!policy.allows(None));
+        assert!(!ActivePeerSelection::Unresolved("missing".into()).allows(Some(&selected)));
+    }
+
+    #[test]
+    fn unmatched_configured_peer_never_falls_back_to_the_only_trusted_entry() {
+        let only = nexkvm_crypto::TrustEntry {
+            display_name: "studio-mac".into(),
+            public_key: nexkvm_crypto::DeviceKeypair::from_seed([7; 32]).public_key(),
+            paired_at: 1,
+        };
+        let selection = resolve_active_peer_from_entries("different-device", &[only]);
+        assert!(
+            matches!(selection, ActivePeerSelection::Unresolved(label) if label == "different-device")
+        );
+    }
+
+    #[test]
+    fn pairing_nonces_are_fresh_csprng_values() {
+        let first = fresh_pairing_nonce().unwrap();
+        let second = fresh_pairing_nonce().unwrap();
+        assert_ne!(first, second);
+        assert!(first.iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn graceful_shutdown_plan_includes_gui_sigterm_on_unix() {
+        assert!(configured_shutdown_signals().contains(&ShutdownSignal::Interrupt));
+        #[cfg(unix)]
+        assert!(configured_shutdown_signals().contains(&ShutdownSignal::Terminate));
     }
 }

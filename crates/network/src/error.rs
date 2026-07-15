@@ -33,6 +33,11 @@ pub enum NetworkError {
     #[error("network operation timed out")]
     Timeout,
 
+    /// The per-connection message-id space has been exhausted. Reusing an id
+    /// would also reuse the AEAD nonce, so the connection must be replaced.
+    #[error("connection message-id space exhausted")]
+    MessageIdExhausted,
+
     /// The peer closed the connection.
     #[error("connection closed by peer")]
     Closed,

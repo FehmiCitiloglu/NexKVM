@@ -149,14 +149,19 @@ impl MonitorLayout {
     }
 
     /// Map normalized `[0,1]` coords back to a global pixel point against the
-    /// bounding box. Returns `None` for an empty layout.
+    /// bounding box. Returns `None` for an empty or zero-area layout.
     #[must_use]
     pub fn denormalize(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
         let bb = self.bounding_box()?;
+        if bb.width == 0 || bb.height == 0 {
+            return None;
+        }
         let nx = nx.clamp(0.0, 1.0);
         let ny = ny.clamp(0.0, 1.0);
-        let px = bb.left() + (nx * bb.width as f64).round() as i32;
-        let py = bb.top() + (ny * bb.height as f64).round() as i32;
+        let px =
+            (bb.left() + (nx * bb.width as f64).round() as i32).min(bb.right().saturating_sub(1));
+        let py =
+            (bb.top() + (ny * bb.height as f64).round() as i32).min(bb.bottom().saturating_sub(1));
         Some((px, py))
     }
 }
@@ -209,10 +214,33 @@ mod tests {
     }
 
     #[test]
+    fn denormalize_maximum_stays_inside_virtual_desktop() {
+        let layout = MonitorLayout::new(vec![
+            (MonitorId(0), DisplayRect::new(-1920, -100, 1920, 1080)),
+            (MonitorId(1), DisplayRect::new(0, -100, 2560, 1440)),
+        ]);
+
+        let bounds = layout.bounding_box().unwrap();
+        let (px, py) = layout.denormalize(1.0, 1.0).unwrap();
+
+        assert_eq!(px, bounds.right() - 1);
+        assert_eq!(py, bounds.bottom() - 1);
+        assert!(bounds.contains(px, py));
+    }
+
+    #[test]
     fn empty_layout_has_no_bounds() {
         let layout = MonitorLayout::default();
         assert!(layout.is_empty());
         assert!(layout.bounding_box().is_none());
         assert!(layout.normalize(0, 0).is_none());
+        assert!(layout.denormalize(0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn zero_area_layout_cannot_denormalize() {
+        let layout = MonitorLayout::new(vec![(MonitorId(0), DisplayRect::new(10, 20, 0, 1080))]);
+
+        assert!(layout.denormalize(0.5, 0.5).is_none());
     }
 }

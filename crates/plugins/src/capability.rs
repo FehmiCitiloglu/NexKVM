@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub struct PluginCapabilities {
     /// Observe clipboard contents.
     pub read_clipboard: bool,
+    /// Observe file and drag-and-drop transfer traffic.
+    #[serde(default)]
+    pub read_file_transfer: bool,
     /// Modify clipboard contents.
     pub write_clipboard: bool,
     /// Observe input events.
@@ -35,6 +38,7 @@ impl PluginCapabilities {
     pub const fn none() -> Self {
         Self {
             read_clipboard: false,
+            read_file_transfer: false,
             write_clipboard: false,
             read_input: false,
             inject_input: false,
@@ -50,6 +54,7 @@ impl PluginCapabilities {
     #[must_use]
     pub fn satisfies(&self, required: &PluginCapabilities) -> bool {
         (!required.read_clipboard || self.read_clipboard)
+            && (!required.read_file_transfer || self.read_file_transfer)
             && (!required.write_clipboard || self.write_clipboard)
             && (!required.read_input || self.read_input)
             && (!required.inject_input || self.inject_input)

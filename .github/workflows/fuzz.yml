@@ -9,10 +9,12 @@ jobs:
   protocol-fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # master
+        with:
+          toolchain: nightly-2026-07-15
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo +nightly-2026-07-15 install cargo-fuzz --version 0.13.2 --locked
       - name: Run protocol decoder fuzz smoke
-        run: cargo fuzz run protocol_decode -- -max_total_time=30
+        run: cargo +nightly-2026-07-15 fuzz run protocol_decode -- -max_total_time=30

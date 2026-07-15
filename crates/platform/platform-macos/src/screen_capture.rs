@@ -242,9 +242,9 @@ fn enumerate_sources(include_app_sources: bool) -> Result<Vec<CaptureSource>, Sc
             let name = app_names
                 .get(&app_id)
                 .cloned()
-                .unwrap_or_else(|| format!("Application {}", app_id));
+                .unwrap_or_else(|| format!("Application {app_id}"));
             sources.push(CaptureSource::Application {
-                id: CaptureSourceId::new(format!("app:{}", app_id)),
+                id: CaptureSourceId::new(format!("app:{app_id}")),
                 name,
             });
         }
@@ -281,11 +281,11 @@ fn enumerate_displays() -> Result<Vec<CaptureSource>, ScreenError> {
             let display_id: u32 = msg_send![screen, displayID];
             let localized_name: *mut objc2::runtime::AnyObject = msg_send![screen, localizedName];
             let label = if localized_name.is_null() {
-                format!("Display {}", i)
+                format!("Display {i}")
             } else {
                 let c_str: *const u8 = msg_send![localized_name, UTF8String];
                 if c_str.is_null() {
-                    format!("Display {}", i)
+                    format!("Display {i}")
                 } else {
                     CStr::from_ptr(c_str.cast::<i8>())
                         .to_string_lossy()
@@ -294,7 +294,7 @@ fn enumerate_displays() -> Result<Vec<CaptureSource>, ScreenError> {
             };
 
             sources.push(CaptureSource::Display {
-                id: CaptureSourceId::new(format!("{}", display_id)),
+                id: CaptureSourceId::new(format!("{display_id}")),
                 label,
             });
         }
@@ -341,10 +341,10 @@ fn enumerate_windows() -> Result<Vec<WindowInfo>, ScreenError> {
             }
 
             let owner_name = dict_get_string(entry, kCGWindowOwnerName)
-                .unwrap_or_else(|| format!("Application {}", owner_pid));
+                .unwrap_or_else(|| format!("Application {owner_pid}"));
             let title = dict_get_string(entry, kCGWindowName)
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| format!("{} Window", owner_name));
+                .unwrap_or_else(|| format!("{owner_name} Window"));
             let on_screen = dict_get_bool(entry, kCGWindowIsOnscreen).unwrap_or(true);
 
             windows.push(WindowInfo {
@@ -469,8 +469,7 @@ fn capture_display_frame(
         let image = CGDisplayCreateImage(display_id);
         if image.is_null() {
             return Err(ScreenError::SourceUnavailable(format!(
-                "display {} is unavailable",
-                display_id
+                "display {display_id} is unavailable"
             )));
         }
         screen_frame_from_image(image, sequence)
@@ -492,8 +491,7 @@ fn capture_window_frame(
         );
         if image.is_null() {
             return Err(ScreenError::SourceUnavailable(format!(
-                "window {} is unavailable",
-                window_id
+                "window {window_id} is unavailable"
             )));
         }
         screen_frame_from_image(image, sequence)
@@ -516,8 +514,7 @@ fn capture_application_frame(
         });
 
     let window = maybe_window.ok_or(ScreenError::SourceUnavailable(format!(
-        "application {} has no capturable windows",
-        app_pid
+        "application {app_pid} has no capturable windows"
     )))?;
 
     capture_window_frame(window.window_id as u32, sequence)

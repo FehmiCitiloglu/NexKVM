@@ -83,7 +83,10 @@ impl std::fmt::Debug for SessionTransferCipher {
 
 impl TransferCipher for SessionTransferCipher {
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, TransferError> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| TransferError::Encryption("message id space exhausted".into()))?;
         let ciphertext = self
             .session
             .seal(id, plaintext)
@@ -99,7 +102,9 @@ impl TransferCipher for SessionTransferCipher {
             return Err(TransferError::Encryption("missing id frame".into()));
         }
         let (id_bytes, body) = ciphertext.split_at(ID_FRAME_LEN);
-        let id = u64::from_be_bytes(id_bytes.try_into().expect("ID_FRAME_LEN bytes"));
+        let mut id_frame = [0u8; ID_FRAME_LEN];
+        id_frame.copy_from_slice(id_bytes);
+        let id = u64::from_be_bytes(id_frame);
         self.session
             .open(id, body)
             .map_err(|e| TransferError::Encryption(e.to_string()))
@@ -176,6 +181,21 @@ mod tests {
         let cipher = SessionTransferCipher::new(Arc::new(MockSession::default()), 0);
         assert!(matches!(
             cipher.open(&[0u8; 4]),
+            Err(TransferError::Encryption(_))
+        ));
+    }
+
+    #[test]
+    fn message_id_exhaustion_never_wraps_or_reuses_a_nonce() {
+        let cipher = SessionTransferCipher::new(Arc::new(MockSession::default()), u64::MAX - 1);
+
+        assert!(cipher.seal(b"last safe id").is_ok());
+        assert!(matches!(
+            cipher.seal(b"must not wrap"),
+            Err(TransferError::Encryption(_))
+        ));
+        assert!(matches!(
+            cipher.seal(b"must stay exhausted"),
             Err(TransferError::Encryption(_))
         ));
     }

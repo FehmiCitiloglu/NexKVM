@@ -11,6 +11,12 @@ The protocol crate defines the wire-level contract shared by every nexkvm transp
 
 Peers negotiate the effective version with `VersionRange`. A mismatched major is rejected; a newer minor is capped to the highest mutually supported minor.
 
+The current wire protocol is `2.0`. Version 2 introduced the signed `NXH2`
+hello with fresh X25519 key agreement and changed authenticated session
+sealing. It is intentionally incompatible with the former version-1 handshake,
+so every Mac in a trusted pair must be upgraded together; mixed `1.x`/`2.x`
+sessions fail before legacy handshake bytes are parsed.
+
 ## Framing
 
 Stream transports use `FrameCodec`:
@@ -63,6 +69,12 @@ Current stable discriminants:
 | `Control` | 100 | `core` |
 
 Never renumber an existing discriminant without a major-version bump.
+
+On an authenticated desktop peer session, `Handshake` with `MessageId(0)` is
+reserved for the bounded two-phase physical-session arbitration exchange. It
+is consumed before application routing. Input, clipboard, and file-transfer
+lanes then share one sequencer beginning at `MessageId(1)`; callers cannot
+choose or reuse the transmitted id.
 
 ## Zero-Copy Handling
 

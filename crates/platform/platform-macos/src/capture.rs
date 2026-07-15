@@ -4,10 +4,12 @@ use async_trait::async_trait;
 use nexkvm_input::{InputCapture, InputError, InputEvent, MouseButton};
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::thread;
+use tokio::sync::{Mutex, mpsc};
+
+const CAPTURE_QUEUE_CAPACITY: usize = 4_096;
 
 /// Quartz event kinds relevant to capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +58,9 @@ pub struct CapturedCgEvent {
     pub keycode: Option<u16>,
     /// CoreGraphics modifier flags for `FlagsChanged` events.
     pub event_flags: Option<u64>,
+    /// Individual state for the modifier key that triggered `FlagsChanged`.
+    /// This disambiguates left/right keys that share one aggregate flag.
+    pub key_down: Option<bool>,
     /// Scroll delta x in line units.
     pub scroll_dx: Option<f64>,
     /// Scroll delta y in line units.
@@ -83,6 +88,7 @@ impl Default for CapturedCgEvent {
             display_size: None,
             keycode: None,
             event_flags: None,
+            key_down: None,
             scroll_dx: None,
             scroll_dy: None,
             delta_dx: None,
@@ -139,7 +145,10 @@ fn plan_capture_event_with_mode(event: CapturedCgEvent, suppressed: bool) -> Opt
         CgCaptureEventType::FlagsChanged => {
             let keycode = event.keycode?;
             let (hid, mask) = cg_modifier_to_hid_and_flag(keycode)?;
-            if event.event_flags? & mask != 0 {
+            let pressed = event
+                .key_down
+                .unwrap_or_else(|| event.event_flags.unwrap_or_default() & mask != 0);
+            if pressed {
                 Some(InputEvent::KeyPress(hid))
             } else {
                 Some(InputEvent::KeyRelease(hid))
@@ -155,7 +164,7 @@ fn normalize_axis(value: f64, max: f64) -> f64 {
     (value / max).clamp(0.0, 1.0)
 }
 
-fn cg_to_hid_keycode(keycode: u16) -> Option<u32> {
+pub(crate) fn cg_to_hid_keycode(keycode: u16) -> Option<u32> {
     match keycode {
         0 => Some(0x04),   // A
         11 => Some(0x05),  // B
@@ -257,7 +266,7 @@ const CG_EVENT_FLAG_MASK_CONTROL: u64 = 0x0004_0000;
 const CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000;
 const CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
 
-fn cg_modifier_to_hid_and_flag(keycode: u16) -> Option<(u32, u64)> {
+pub(crate) fn cg_modifier_to_hid_and_flag(keycode: u16) -> Option<(u32, u64)> {
     match keycode {
         59 => Some((0xE0, CG_EVENT_FLAG_MASK_CONTROL)),
         56 => Some((0xE1, CG_EVENT_FLAG_MASK_SHIFT)),
@@ -272,44 +281,223 @@ fn cg_modifier_to_hid_and_flag(keycode: u16) -> Option<(u32, u64)> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum CaptureFault {
+    None = 0,
+    QueueOverflow = 1,
+    ReceiverClosed = 2,
+}
+
+impl CaptureFault {
+    fn from_raw(raw: u8) -> Self {
+        match raw {
+            1 => Self::QueueOverflow,
+            2 => Self::ReceiverClosed,
+            _ => Self::None,
+        }
+    }
+
+    fn message(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::QueueOverflow => Some(
+                "macOS capture queue overflowed while local input was suppressed; remote input session stopped",
+            ),
+            Self::ReceiverClosed => Some(
+                "macOS capture receiver closed while local input was suppressed; remote input session stopped",
+            ),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EventTapControl {
+    suppressed: AtomicBool,
+    fault: AtomicU8,
+    shutdown: AtomicBool,
+    native_handles: std::sync::Mutex<EventTapNativeHandles>,
+    tap_reenable_count: AtomicU64,
+}
+
+#[derive(Debug, Default)]
+struct EventTapNativeHandles {
+    tap: usize,
+    run_loop: usize,
+}
+
+impl Default for EventTapControl {
+    fn default() -> Self {
+        Self {
+            suppressed: AtomicBool::new(false),
+            fault: AtomicU8::new(CaptureFault::None as u8),
+            shutdown: AtomicBool::new(false),
+            native_handles: std::sync::Mutex::new(EventTapNativeHandles::default()),
+            tap_reenable_count: AtomicU64::new(0),
+        }
+    }
+}
+
+impl EventTapControl {
+    fn record_fault(&self, fault: CaptureFault) {
+        let _ = self.fault.compare_exchange(
+            CaptureFault::None as u8,
+            fault as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    fn fault(&self) -> CaptureFault {
+        CaptureFault::from_raw(self.fault.load(Ordering::SeqCst))
+    }
+
+    fn restore_local_cursor(&self) {
+        update_suppression(&self.suppressed, false, set_native_cursor_hidden);
+    }
+
+    fn native_handles(&self) -> std::sync::MutexGuard<'_, EventTapNativeHandles> {
+        self.native_handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[derive(Debug)]
+struct CaptureLifecycle {
+    control: Arc<EventTapControl>,
+    update_native_cursor: bool,
+    event_thread: std::sync::Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl CaptureLifecycle {
+    fn new(control: Arc<EventTapControl>, event_thread: Option<thread::JoinHandle<()>>) -> Self {
+        Self {
+            control,
+            update_native_cursor: true,
+            event_thread: std::sync::Mutex::new(event_thread),
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test(control: Arc<EventTapControl>) -> Self {
+        Self {
+            control,
+            update_native_cursor: false,
+            event_thread: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl Drop for CaptureLifecycle {
+    fn drop(&mut self) {
+        self.control.shutdown.store(true, Ordering::SeqCst);
+        let was_suppressed = self.control.suppressed.swap(false, Ordering::SeqCst);
+        if was_suppressed && self.update_native_cursor {
+            set_native_cursor_hidden(false);
+        }
+        let handles = self.control.native_handles();
+        if handles.run_loop != 0 {
+            // SAFETY: The event-tap thread publishes and clears this pointer
+            // under the same mutex. Holding it prevents teardown/release from
+            // racing this stop request.
+            unsafe { CFRunLoopStop(handles.run_loop as CFRunLoopRef) };
+        }
+        drop(handles);
+        let event_thread = self
+            .event_thread
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(event_thread) = event_thread
+            && event_thread.join().is_err()
+        {
+            tracing::warn!("macOS event-tap thread panicked during shutdown");
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MacosInputCapture {
     accessibility_trusted: bool,
-    receiver: Option<Arc<Mutex<Receiver<InputEvent>>>>,
-    suppressed: Arc<AtomicBool>,
+    receiver: Option<Arc<Mutex<mpsc::Receiver<InputEvent>>>>,
+    lifecycle: Arc<CaptureLifecycle>,
 }
 
 impl MacosInputCapture {
     #[must_use]
     pub fn new(accessibility_trusted: bool) -> Self {
-        let suppressed = Arc::new(AtomicBool::new(false));
-        let receiver = if accessibility_trusted {
-            Some(start_event_tap_capture(Arc::clone(&suppressed)))
+        let control = Arc::new(EventTapControl::default());
+        let (receiver, event_thread) = if accessibility_trusted {
+            let (receiver, event_thread) = start_event_tap_capture(Arc::clone(&control));
+            (Some(receiver), Some(event_thread))
         } else {
-            None
+            (None, None)
         };
         Self {
             accessibility_trusted,
             receiver,
-            suppressed,
+            lifecycle: Arc::new(CaptureLifecycle::new(control, event_thread)),
         }
     }
 
     pub fn set_suppressed(&self, suppressed: bool) {
-        update_suppression(&self.suppressed, suppressed, set_native_cursor_hidden);
+        if suppressed && self.lifecycle.control.fault() != CaptureFault::None {
+            self.lifecycle.control.restore_local_cursor();
+            return;
+        }
+        update_suppression(
+            &self.lifecycle.control.suppressed,
+            suppressed,
+            set_native_cursor_hidden,
+        );
     }
 
     #[cfg(test)]
     fn with_events(accessibility_trusted: bool, events: Vec<InputEvent>) -> Self {
-        let (sender, receiver) = mpsc::channel();
+        let control = Arc::new(EventTapControl::default());
+        Self::with_control_and_events_with_permission(control, events, accessibility_trusted)
+    }
+
+    #[cfg(test)]
+    fn with_control_and_events(control: Arc<EventTapControl>, events: Vec<InputEvent>) -> Self {
+        Self::with_control_and_events_with_permission(control, events, true)
+    }
+
+    #[cfg(test)]
+    fn with_control_and_events_with_permission(
+        control: Arc<EventTapControl>,
+        events: Vec<InputEvent>,
+        accessibility_trusted: bool,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel(events.len().max(1));
         for event in events {
-            sender.send(event).expect("send fixture event");
+            sender.try_send(event).expect("send fixture event");
         }
         Self {
             accessibility_trusted,
             receiver: Some(Arc::new(Mutex::new(receiver))),
-            suppressed: Arc::new(AtomicBool::new(false)),
+            lifecycle: Arc::new(CaptureLifecycle::for_test(control)),
         }
+    }
+
+    #[cfg(test)]
+    fn from_test_parts(lifecycle: Arc<CaptureLifecycle>) -> Self {
+        Self {
+            accessibility_trusted: false,
+            receiver: None,
+            lifecycle,
+        }
+    }
+
+    /// Discard input captured before the current authenticated peer session.
+    /// This prevents a stale disconnected backlog from triggering a handoff.
+    pub async fn discard_pending(&self) {
+        let Some(receiver) = &self.receiver else {
+            return;
+        };
+        let mut receiver = receiver.lock().await;
+        while receiver.try_recv().is_ok() {}
     }
 }
 
@@ -361,11 +549,17 @@ impl InputCapture for MacosInputCapture {
                 "macOS CGEvent tap capture loop is not running".into(),
             ));
         };
-        receiver
-            .lock()
-            .map_err(|_| InputError::Backend("macOS capture receiver lock poisoned".into()))?
-            .recv()
-            .map_err(|_| InputError::Backend("macOS CGEvent tap capture loop stopped".into()))
+        if let Some(message) = self.lifecycle.control.fault().message() {
+            return Err(InputError::Backend(message.into()));
+        }
+        let event =
+            receiver.lock().await.recv().await.ok_or_else(|| {
+                InputError::Backend("macOS CGEvent tap capture loop stopped".into())
+            })?;
+        if let Some(message) = self.lifecycle.control.fault().message() {
+            return Err(InputError::Backend(message.into()));
+        }
+        Ok(event)
     }
 }
 
@@ -383,16 +577,34 @@ const K_CG_SESSION_EVENT_TAP: u32 = 1;
 const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
 const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
 const K_CG_EVENT_FIELD_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+const K_CG_EVENT_SOURCE_USER_DATA: u32 = 42;
 const K_CG_MOUSE_EVENT_DELTA_X: u32 = 4;
 const K_CG_MOUSE_EVENT_DELTA_Y: u32 = 5;
 const K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_1: u32 = 11;
 const K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_2: u32 = 12;
+const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
+const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = u32::MAX - 1;
+const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = u32::MAX;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct CGPoint {
     x: f64,
     y: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CGRect {
+    origin: CGPoint,
+    size: CGSize,
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -405,12 +617,18 @@ unsafe extern "C" {
         callback: CGEventTapCallBack,
         user_info: *mut c_void,
     ) -> CFMachPortRef;
+    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
     fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
     fn CGEventGetFlags(event: CGEventRef) -> u64;
+    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
     fn CGMainDisplayID() -> u32;
-    fn CGDisplayPixelsWide(display: u32) -> usize;
-    fn CGDisplayPixelsHigh(display: u32) -> usize;
+    fn CGDisplayBounds(display: u32) -> CGRect;
+    fn CGGetActiveDisplayList(
+        max_displays: u32,
+        active_displays: *mut u32,
+        display_count: *mut u32,
+    ) -> i32;
     fn CGDisplayHideCursor(display: u32) -> i32;
     fn CGDisplayShowCursor(display: u32) -> i32;
     fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
@@ -425,7 +643,9 @@ unsafe extern "C" {
     ) -> CFRunLoopSourceRef;
     fn CFRunLoopGetCurrent() -> CFRunLoopRef;
     fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+    fn CFRunLoopRemoveSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
     fn CFRunLoopRun();
+    fn CFRunLoopStop(rl: CFRunLoopRef);
     fn CFRelease(cf: CFTypeRef);
 
     static kCFRunLoopCommonModes: CFStringRef;
@@ -433,14 +653,20 @@ unsafe extern "C" {
 
 #[derive(Debug)]
 struct CaptureCallbackState {
-    sender: Sender<InputEvent>,
-    suppressed: Arc<AtomicBool>,
+    sender: mpsc::Sender<InputEvent>,
+    control: Arc<EventTapControl>,
 }
 
-fn start_event_tap_capture(suppressed: Arc<AtomicBool>) -> Arc<Mutex<Receiver<InputEvent>>> {
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || run_event_tap(CaptureCallbackState { sender, suppressed }));
-    Arc::new(Mutex::new(receiver))
+fn start_event_tap_capture(
+    control: Arc<EventTapControl>,
+) -> (
+    Arc<Mutex<mpsc::Receiver<InputEvent>>>,
+    thread::JoinHandle<()>,
+) {
+    let (sender, receiver) = mpsc::channel(CAPTURE_QUEUE_CAPACITY);
+    let event_thread =
+        thread::spawn(move || run_event_tap(CaptureCallbackState { sender, control }));
+    (Arc::new(Mutex::new(receiver)), event_thread)
 }
 
 fn run_event_tap(state: CaptureCallbackState) {
@@ -467,22 +693,112 @@ fn run_event_tap(state: CaptureCallbackState) {
         }
         return;
     }
-    // SAFETY: `tap` is a valid mach port. Source is added to this thread's run
-    // loop in common modes and both CoreFoundation objects are retained by the
-    // run loop for its lifetime.
+    // Publish the actual event-tap port, not the callback proxy. It remains
+    // retained until the run-loop teardown below completes.
+    // SAFETY: `user_info` still owns a live `CaptureCallbackState` here.
+    let control = unsafe { Arc::clone(&(*user_info.cast::<CaptureCallbackState>()).control) };
+    control.native_handles().tap = tap as usize;
+
+    // SAFETY: `tap` is a valid mach port. The source and tap are explicitly
+    // removed/released after the run loop stops, and `user_info` is reclaimed
+    // only after callbacks on this thread have ended.
     unsafe {
         let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
-        if !source.is_null() {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
-            CFRelease(source.cast());
+        if source.is_null() {
+            control.native_handles().tap = 0;
+            CFRelease(tap.cast());
+            drop(Box::from_raw(user_info.cast::<CaptureCallbackState>()));
+            return;
         }
+        let run_loop = CFRunLoopGetCurrent();
+        control.native_handles().run_loop = run_loop as usize;
+        CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
+        if !control.shutdown.load(Ordering::Acquire) {
+            CFRunLoopRun();
+        }
+        control.native_handles().run_loop = 0;
+        CFRunLoopRemoveSource(run_loop, source, kCFRunLoopCommonModes);
+        CFRelease(source.cast());
+        control.native_handles().tap = 0;
         CFRelease(tap.cast());
-        CFRunLoopRun();
+        drop(Box::from_raw(user_info.cast::<CaptureCallbackState>()));
     }
 }
 
 fn capture_tap_options() -> u32 {
     K_CG_EVENT_TAP_OPTION_DEFAULT
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TapDisableReason {
+    Timeout,
+    UserInput,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeCallbackPlan {
+    Reenable(TapDisableReason),
+    Capture,
+    PassThrough,
+}
+
+fn plan_native_callback(event_type: u32, event_present: bool) -> NativeCallbackPlan {
+    match event_type {
+        K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT => {
+            NativeCallbackPlan::Reenable(TapDisableReason::Timeout)
+        }
+        K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT => {
+            NativeCallbackPlan::Reenable(TapDisableReason::UserInput)
+        }
+        _ if event_present => NativeCallbackPlan::Capture,
+        _ => NativeCallbackPlan::PassThrough,
+    }
+}
+
+fn is_nexkvm_injected_event(source_user_data: i64) -> bool {
+    source_user_data == crate::NEXKVM_EVENT_SOURCE_USER_DATA
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueSendOutcome {
+    Sent,
+    Full,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueSendPlan {
+    UseCaptureAction,
+    DropAndPassThrough,
+    FailSafePassThrough(CaptureFault),
+}
+
+fn plan_queue_send(
+    suppressed: bool,
+    droppable_motion: bool,
+    outcome: QueueSendOutcome,
+) -> QueueSendPlan {
+    match (suppressed, droppable_motion, outcome) {
+        (_, _, QueueSendOutcome::Sent) => QueueSendPlan::UseCaptureAction,
+        (false, true, QueueSendOutcome::Full) | (false, _, QueueSendOutcome::Closed) => {
+            QueueSendPlan::DropAndPassThrough
+        }
+        (_, _, QueueSendOutcome::Full) => {
+            QueueSendPlan::FailSafePassThrough(CaptureFault::QueueOverflow)
+        }
+        (true, _, QueueSendOutcome::Closed) => {
+            QueueSendPlan::FailSafePassThrough(CaptureFault::ReceiverClosed)
+        }
+    }
+}
+
+fn is_droppable_motion(event: InputEvent) -> bool {
+    matches!(
+        event,
+        InputEvent::PointerMove { .. }
+            | InputEvent::RelativeMove { .. }
+            | InputEvent::RawMotion { .. }
+    )
 }
 
 extern "C" fn capture_callback(
@@ -491,24 +807,73 @@ extern "C" fn capture_callback(
     event: CGEventRef,
     user_info: *mut c_void,
 ) -> CGEventRef {
-    if user_info.is_null() || event.is_null() {
+    if user_info.is_null() {
+        return event;
+    }
+    // SAFETY: `user_info` was created from `Box<CaptureCallbackState>` in
+    // `run_event_tap` and is reclaimed only after this run loop stops.
+    let state = unsafe { &*(user_info.cast::<CaptureCallbackState>()) };
+    match plan_native_callback(event_type, !event.is_null()) {
+        NativeCallbackPlan::Reenable(reason) => {
+            let handles = state.control.native_handles();
+            if handles.tap != 0 && !state.control.shutdown.load(Ordering::Acquire) {
+                // SAFETY: `tap` is the retained CFMachPort returned by
+                // CGEventTapCreate and the native-handle mutex prevents its
+                // release from racing this call.
+                unsafe { CGEventTapEnable(handles.tap as CFMachPortRef, true) };
+                let count = state
+                    .control
+                    .tap_reenable_count
+                    .fetch_add(1, Ordering::Relaxed)
+                    .saturating_add(1);
+                tracing::warn!(?reason, count, "macOS event tap disabled; re-enabled");
+            } else {
+                tracing::warn!(?reason, "macOS event tap disabled during shutdown");
+            }
+            return event;
+        }
+        NativeCallbackPlan::PassThrough => return event,
+        NativeCallbackPlan::Capture => {}
+    }
+    // SAFETY: `event` is non-null in the Capture plan and remains owned by
+    // CoreGraphics for the callback duration. Reading source user data is
+    // side-effect free. NexKVM-tagged events must pass through locally but
+    // must never re-enter the outbound capture queue.
+    let source_user_data =
+        unsafe { CGEventGetIntegerValueField(event, K_CG_EVENT_SOURCE_USER_DATA) };
+    if is_nexkvm_injected_event(source_user_data) {
+        tracing::trace!("ignored NexKVM-injected event in macOS capture tap");
         return event;
     }
     let Some(captured) = captured_from_native(event_type, event) else {
         return event;
     };
-    // SAFETY: `user_info` was created from `Box<CaptureCallbackState>` in
-    // `run_event_tap` and lives for the run loop thread lifetime.
-    let state = unsafe { &*(user_info.cast::<CaptureCallbackState>()) };
-    let suppressed = state.suppressed.load(Ordering::SeqCst);
+    let suppressed = state.control.suppressed.load(Ordering::SeqCst);
     let action = plan_capture_action(captured, suppressed);
-    if let Some(input_event) = action.forward {
-        let _ = state.sender.send(input_event);
-    }
-    if action.pass_through {
-        event
-    } else {
-        ptr::null_mut()
+    let (outcome, droppable_motion) = match action.forward {
+        Some(input_event) => {
+            let droppable_motion = is_droppable_motion(input_event);
+            let outcome = match state.sender.try_send(input_event) {
+                Ok(()) => QueueSendOutcome::Sent,
+                Err(mpsc::error::TrySendError::Full(_)) => QueueSendOutcome::Full,
+                Err(mpsc::error::TrySendError::Closed(_)) => QueueSendOutcome::Closed,
+            };
+            (outcome, droppable_motion)
+        }
+        None => return event,
+    };
+    match plan_queue_send(suppressed, droppable_motion, outcome) {
+        QueueSendPlan::UseCaptureAction if !action.pass_through => ptr::null_mut(),
+        QueueSendPlan::UseCaptureAction | QueueSendPlan::DropAndPassThrough => event,
+        QueueSendPlan::FailSafePassThrough(fault) => {
+            state.control.record_fault(fault);
+            state.control.restore_local_cursor();
+            tracing::error!(
+                ?fault,
+                "macOS capture failed open to protect local input safety"
+            );
+            event
+        }
     }
 }
 
@@ -517,10 +882,20 @@ fn captured_from_native(event_type: u32, event: CGEventRef) -> Option<CapturedCg
     // SAFETY: `event` is provided by CoreGraphics to the callback and is valid
     // for the duration of this call. Field reads are side-effect free.
     let location = unsafe { CGEventGetLocation(event) };
-    let display = main_display_size();
+    let desktop = active_desktop_bounds();
+    let display = (desktop.size.width.max(1.0), desktop.size.height.max(1.0));
     let keycode =
         unsafe { CGEventGetIntegerValueField(event, K_CG_EVENT_FIELD_KEYBOARD_EVENT_KEYCODE) };
     let event_flags = unsafe { CGEventGetFlags(event) };
+    let key_down = if matches!(event_type, CgCaptureEventType::FlagsChanged) {
+        // SAFETY: The state id is a documented CoreGraphics constant and the
+        // key code was read from the current callback event.
+        Some(unsafe {
+            CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, keycode as u16)
+        })
+    } else {
+        None
+    };
     let scroll_y =
         unsafe { CGEventGetIntegerValueField(event, K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_1) };
     let scroll_x =
@@ -529,10 +904,11 @@ fn captured_from_native(event_type: u32, event: CGEventRef) -> Option<CapturedCg
     let delta_y = unsafe { CGEventGetIntegerValueField(event, K_CG_MOUSE_EVENT_DELTA_Y) };
     Some(CapturedCgEvent {
         event_type,
-        location: Some((location.x, location.y)),
+        location: Some((location.x - desktop.origin.x, location.y - desktop.origin.y)),
         display_size: Some(display),
         keycode: Some(keycode as u16),
         event_flags: Some(event_flags),
+        key_down,
         scroll_dx: Some(scroll_x as f64),
         scroll_dy: Some(scroll_y as f64),
         delta_dx: Some(delta_x as f64 / display.0.max(1.0)),
@@ -581,16 +957,51 @@ fn capture_event_mask() -> u64 {
     .fold(0u64, |mask, event_type| mask | (1u64 << event_type as u32))
 }
 
-fn main_display_size() -> (f64, f64) {
-    // SAFETY: Display metadata functions are read-only. Zero sizes are guarded
-    // with `max(1)` to avoid divide-by-zero in normalization.
+fn active_desktop_bounds() -> CGRect {
+    const MAX_DISPLAYS: usize = 32;
+    let mut displays = [0u32; MAX_DISPLAYS];
+    let mut count = 0u32;
+    // SAFETY: CoreGraphics receives a valid fixed-size output array and count
+    // pointer. Display metadata calls retain no caller-owned memory.
     unsafe {
-        let display = CGMainDisplayID();
-        (
-            CGDisplayPixelsWide(display).max(1) as f64,
-            CGDisplayPixelsHigh(display).max(1) as f64,
-        )
+        let status = CGGetActiveDisplayList(MAX_DISPLAYS as u32, displays.as_mut_ptr(), &mut count);
+        if status == 0 && count > 0 {
+            return union_display_bounds(
+                displays[..count.min(MAX_DISPLAYS as u32) as usize]
+                    .iter()
+                    .map(|display| CGDisplayBounds(*display)),
+            )
+            .unwrap_or_else(main_display_bounds);
+        }
     }
+    main_display_bounds()
+}
+
+fn main_display_bounds() -> CGRect {
+    // SAFETY: Display metadata is read-only and the main display id is valid.
+    unsafe { CGDisplayBounds(CGMainDisplayID()) }
+}
+
+fn union_display_bounds(bounds: impl IntoIterator<Item = CGRect>) -> Option<CGRect> {
+    let mut bounds = bounds.into_iter();
+    let first = bounds.next()?;
+    let mut min_x = first.origin.x;
+    let mut min_y = first.origin.y;
+    let mut max_x = first.origin.x + first.size.width.max(0.0);
+    let mut max_y = first.origin.y + first.size.height.max(0.0);
+    for bounds in bounds {
+        min_x = min_x.min(bounds.origin.x);
+        min_y = min_y.min(bounds.origin.y);
+        max_x = max_x.max(bounds.origin.x + bounds.size.width.max(0.0));
+        max_y = max_y.max(bounds.origin.y + bounds.size.height.max(0.0));
+    }
+    Some(CGRect {
+        origin: CGPoint { x: min_x, y: min_y },
+        size: CGSize {
+            width: (max_x - min_x).max(1.0),
+            height: (max_y - min_y).max(1.0),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -628,6 +1039,45 @@ mod tests {
         assert_eq!(
             plan_capture_event(event),
             Some(InputEvent::PointerMove { x: 0.5, y: 0.5 })
+        );
+    }
+
+    #[test]
+    fn desktop_union_handles_retina_logical_sizes_and_negative_monitor_origins() {
+        let union = union_display_bounds([
+            CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: CGSize {
+                    width: 1512.0,
+                    height: 982.0,
+                },
+            },
+            CGRect {
+                origin: CGPoint {
+                    x: -1920.0,
+                    y: -100.0,
+                },
+                size: CGSize {
+                    width: 1920.0,
+                    height: 1080.0,
+                },
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(
+            union.origin,
+            CGPoint {
+                x: -1920.0,
+                y: -100.0
+            }
+        );
+        assert_eq!(
+            union.size,
+            CGSize {
+                width: 3432.0,
+                height: 1082.0,
+            }
         );
     }
 
@@ -689,6 +1139,30 @@ mod tests {
     }
 
     #[test]
+    fn individual_modifier_state_wins_over_the_shared_aggregate_flag() {
+        assert_eq!(
+            plan_capture_event(CapturedCgEvent {
+                event_type: CgCaptureEventType::FlagsChanged,
+                keycode: Some(56),
+                event_flags: Some(CG_EVENT_FLAG_MASK_SHIFT),
+                key_down: Some(false),
+                ..CapturedCgEvent::default()
+            }),
+            Some(InputEvent::KeyRelease(0xE1))
+        );
+        assert_eq!(
+            plan_capture_event(CapturedCgEvent {
+                event_type: CgCaptureEventType::FlagsChanged,
+                keycode: Some(60),
+                event_flags: Some(CG_EVENT_FLAG_MASK_SHIFT),
+                key_down: Some(true),
+                ..CapturedCgEvent::default()
+            }),
+            Some(InputEvent::KeyPress(0xE5))
+        );
+    }
+
+    #[test]
     fn unsupported_capture_event_is_ignored() {
         assert_eq!(
             plan_capture_event(CapturedCgEvent {
@@ -740,6 +1214,88 @@ mod tests {
         assert_eq!(capture_tap_options(), 0);
     }
 
+    #[test]
+    fn suppressed_queue_overflow_fails_open_for_the_current_event() {
+        assert_eq!(
+            plan_queue_send(true, false, QueueSendOutcome::Full),
+            QueueSendPlan::FailSafePassThrough(CaptureFault::QueueOverflow)
+        );
+    }
+
+    #[test]
+    fn local_motion_overflow_remains_local_and_does_not_fail_the_session() {
+        assert_eq!(
+            plan_queue_send(false, true, QueueSendOutcome::Full),
+            QueueSendPlan::DropAndPassThrough
+        );
+    }
+
+    #[test]
+    fn local_key_or_button_overflow_ends_the_queue_instead_of_losing_state() {
+        assert_eq!(
+            plan_queue_send(false, false, QueueSendOutcome::Full),
+            QueueSendPlan::FailSafePassThrough(CaptureFault::QueueOverflow)
+        );
+        assert!(!is_droppable_motion(InputEvent::KeyRelease(0xE1)));
+        assert!(!is_droppable_motion(InputEvent::ButtonRelease(
+            nexkvm_input::MouseButton::Left
+        )));
+    }
+
+    #[test]
+    fn event_tap_disable_pseudo_events_are_reenabled_not_decoded_as_input() {
+        assert_eq!(
+            plan_native_callback(K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT, false),
+            NativeCallbackPlan::Reenable(TapDisableReason::Timeout)
+        );
+        assert_eq!(
+            plan_native_callback(K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT, false),
+            NativeCallbackPlan::Reenable(TapDisableReason::UserInput)
+        );
+    }
+
+    #[test]
+    fn nexkvm_injected_events_are_passed_through_without_recapture() {
+        assert!(is_nexkvm_injected_event(
+            crate::NEXKVM_EVENT_SOURCE_USER_DATA
+        ));
+        assert!(!is_nexkvm_injected_event(0));
+        assert!(!is_nexkvm_injected_event(i64::MAX));
+    }
+
+    #[test]
+    fn final_capture_clone_restores_suppression_even_with_callback_state_alive() {
+        let control = Arc::new(EventTapControl::default());
+        control.suppressed.store(true, Ordering::SeqCst);
+        let callback_keepalive = Arc::clone(&control);
+        let lifecycle = Arc::new(CaptureLifecycle::for_test(Arc::clone(&control)));
+        let capture = MacosInputCapture::from_test_parts(Arc::clone(&lifecycle));
+        let capture_clone = capture.clone();
+
+        drop(capture);
+        assert!(control.suppressed.load(Ordering::SeqCst));
+        drop(capture_clone);
+        drop(lifecycle);
+
+        assert!(!control.suppressed.load(Ordering::SeqCst));
+        assert!(control.shutdown.load(Ordering::SeqCst));
+        assert_eq!(Arc::strong_count(&control), 2);
+        drop(callback_keepalive);
+    }
+
+    #[tokio::test]
+    async fn capture_health_fault_ends_the_forwarder_before_stale_events_escape() {
+        let control = Arc::new(EventTapControl::default());
+        let capture = MacosInputCapture::with_control_and_events(
+            Arc::clone(&control),
+            vec![InputEvent::KeyPress(0x04)],
+        );
+        control.record_fault(CaptureFault::QueueOverflow);
+
+        let error = capture.next_event().await.unwrap_err();
+        assert!(matches!(error, InputError::Backend(message) if message.contains("overflow")));
+    }
+
     #[tokio::test]
     async fn capture_refuses_without_accessibility_permission() {
         let capture = MacosInputCapture::new(false);
@@ -756,5 +1312,22 @@ mod tests {
             capture.next_event().await.unwrap(),
             InputEvent::KeyPress(0x04)
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn idle_capture_does_not_block_the_async_runtime() {
+        let (sender, receiver) = mpsc::channel(1);
+        let control = Arc::new(EventTapControl::default());
+        let capture = MacosInputCapture {
+            accessibility_trusted: true,
+            receiver: Some(Arc::new(Mutex::new(receiver))),
+            lifecycle: Arc::new(CaptureLifecycle::for_test(control)),
+        };
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(20), capture.next_event()).await;
+
+        assert!(result.is_err(), "an idle capture should remain pending");
+        drop(sender);
     }
 }

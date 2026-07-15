@@ -23,6 +23,7 @@
 mod coordinator;
 mod error;
 mod identity;
+mod key_agreement;
 mod pairing;
 mod qr;
 mod session;
@@ -33,6 +34,7 @@ pub use error::CryptoError;
 pub use identity::{
     DeviceIdentity, DeviceKeypair, IdentitySignature, PublicKey, verify_identity_signature,
 };
+pub use key_agreement::{EphemeralKeyAgreement, EphemeralPublicKey, SharedSecret};
 pub use pairing::{PairingMethod, PairingRequest, PairingResponse, PairingState};
 pub use qr::{NONCE_LEN, PairingBootstrap};
 pub use session::{AeadSessionSecurity, SessionKeys, SessionSecurity};

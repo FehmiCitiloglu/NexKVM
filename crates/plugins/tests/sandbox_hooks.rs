@@ -83,6 +83,7 @@ async fn clipboard_plugin_only_sees_clipboard_hooks() {
         .expect("grant satisfies requirement");
 
     registry.dispatch(&inbound(MessageKind::Clipboard)).await;
+    registry.dispatch(&inbound(MessageKind::FileTransfer)).await;
     registry.dispatch(&inbound(MessageKind::Input)).await;
     registry.dispatch(&inbound(MessageKind::Heartbeat)).await;
 
@@ -91,6 +92,34 @@ async fn clipboard_plugin_only_sees_clipboard_hooks() {
         1,
         "only the clipboard event should reach a clipboard-only plugin"
     );
+}
+
+/// File-transfer traffic requires an explicit grant independent of clipboard.
+#[tokio::test]
+async fn file_transfer_plugin_only_sees_file_transfer_hooks() {
+    let plugin = Arc::new(CountingPlugin::new(PluginCapabilities {
+        read_file_transfer: true,
+        ..PluginCapabilities::none()
+    }));
+    let seen = plugin.seen.clone();
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .register(
+            plugin,
+            PluginCapabilities {
+                read_file_transfer: true,
+                ..PluginCapabilities::none()
+            },
+        )
+        .await
+        .expect("grant satisfies requirement");
+
+    registry.dispatch(&inbound(MessageKind::Clipboard)).await;
+    registry.dispatch(&inbound(MessageKind::FileTransfer)).await;
+    registry.dispatch(&inbound(MessageKind::Input)).await;
+
+    assert_eq!(seen.load(Ordering::SeqCst), 1);
 }
 
 /// The host-call broker authorizes granted surfaces and denies the rest.

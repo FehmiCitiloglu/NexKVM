@@ -33,6 +33,17 @@ use tokio::task::JoinHandle;
 use crate::reconnect::{ReconnectPlanner, ReconnectPolicy, ReconnectTarget};
 use crate::{DiscoveredDevice, Discovery, DiscoveryError};
 
+fn lock_recovering<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("recovering poisoned discovery-service mutex");
+            mutex.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Decides whether a discovered peer is one we should auto-reconnect to.
 ///
 /// Implementations match the peer's advertised fingerprint against the local
@@ -157,7 +168,7 @@ impl DiscoveryService {
                 let now = Instant::now();
                 // Compute targets under the lock, then release it before await.
                 let targets = {
-                    let mut planner = planner.lock().expect("planner mutex poisoned");
+                    let mut planner = lock_recovering(&planner);
                     planner.due(&visible, |d| trust.is_trusted(d), now)
                 };
                 for target in targets {
@@ -168,10 +179,7 @@ impl DiscoveryService {
             }
         });
 
-        self.tasks
-            .lock()
-            .expect("tasks mutex poisoned")
-            .push(handle);
+        lock_recovering(&self.tasks).push(handle);
         Ok(rx)
     }
 
@@ -185,18 +193,12 @@ impl DiscoveryService {
 
     /// Report that a reconnect attempt to `id` succeeded, clearing its backoff.
     pub fn report_success(&self, id: DeviceId) {
-        self.planner
-            .lock()
-            .expect("planner mutex poisoned")
-            .record_success(id);
+        lock_recovering(&self.planner).record_success(id);
     }
 
     /// Report that a reconnect attempt to `id` failed, growing its backoff.
     pub fn report_failure(&self, id: DeviceId) {
-        self.planner
-            .lock()
-            .expect("planner mutex poisoned")
-            .record_failure(id, Instant::now());
+        lock_recovering(&self.planner).record_failure(id, Instant::now());
     }
 }
 
@@ -210,10 +212,8 @@ impl std::fmt::Debug for DiscoveryService {
 
 impl Drop for DiscoveryService {
     fn drop(&mut self) {
-        if let Ok(tasks) = self.tasks.lock() {
-            for handle in tasks.iter() {
-                handle.abort();
-            }
+        for handle in lock_recovering(&self.tasks).iter() {
+            handle.abort();
         }
     }
 }
@@ -312,5 +312,50 @@ mod tests {
 
         let got = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
         assert!(got.is_err(), "no trusted peers => no targets");
+    }
+
+    #[tokio::test]
+    async fn poisoned_runtime_mutexes_recover_without_panicking() {
+        fn poison<T>(mutex: &Mutex<T>) {
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = mutex.lock().expect("fixture acquires healthy lock");
+                panic!("poison discovery-service fixture");
+            }));
+            assert!(poisoned.is_err());
+        }
+
+        let backend = Arc::new(StubDiscovery {
+            peers: Vec::new(),
+            advertised: Mutex::new(None),
+        });
+        let service = DiscoveryService::new(
+            backend,
+            Arc::new(FingerprintAllowlist::default()),
+            ServiceConfig {
+                poll_interval: Duration::from_secs(60),
+                ..ServiceConfig::default()
+            },
+        );
+        poison(&service.planner);
+        poison(&service.tasks);
+
+        let peer_id = DeviceId::generate();
+        service.report_failure(peer_id);
+        service.report_success(peer_id);
+
+        let info = DeviceInfo::new("poison-safe", OsKind::MacOs);
+        let _receiver = service
+            .start(&info, "127.0.0.1:47654".parse().unwrap(), None)
+            .await
+            .expect("poisoned locks recover");
+
+        assert_eq!(
+            service
+                .tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
     }
 }

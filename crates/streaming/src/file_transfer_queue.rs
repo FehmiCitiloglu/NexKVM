@@ -178,7 +178,7 @@ mod tests {
             DeviceId::generate(),
             None,
             TransferSource::DragDrop,
-            vec![TransferEntry::file("a.bin", bytes).unwrap()],
+            vec![TransferEntry::file("a.bin", bytes, [0; 32]).unwrap()],
         )
         .unwrap()
     }

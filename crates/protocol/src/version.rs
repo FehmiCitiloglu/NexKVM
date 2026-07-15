@@ -19,7 +19,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 /// The protocol version this build implements.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 2, minor: 0 };
 
 /// A semantic protocol version (`major.minor`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ impl VersionRange {
     #[must_use]
     pub const fn current() -> Self {
         Self {
-            min: ProtocolVersion { major: 1, minor: 0 },
+            min: PROTOCOL_VERSION,
             max: PROTOCOL_VERSION,
         }
     }
@@ -94,14 +94,21 @@ mod tests {
     #[test]
     fn negotiates_down_to_shared_minor() {
         let range = VersionRange::current();
-        let peer = ProtocolVersion { major: 1, minor: 5 };
+        let peer = ProtocolVersion { major: 2, minor: 5 };
         assert_eq!(range.negotiate(peer), Some(PROTOCOL_VERSION));
     }
 
     #[test]
     fn rejects_mismatched_major() {
         let range = VersionRange::current();
-        let peer = ProtocolVersion { major: 2, minor: 0 };
+        let peer = ProtocolVersion { major: 1, minor: 0 };
         assert_eq!(range.negotiate(peer), None);
+    }
+
+    #[test]
+    fn current_range_requires_the_v2_handshake_major() {
+        assert_eq!(PROTOCOL_VERSION, ProtocolVersion { major: 2, minor: 0 });
+        assert_eq!(VersionRange::current().min, PROTOCOL_VERSION);
+        assert_eq!(VersionRange::current().max, PROTOCOL_VERSION);
     }
 }

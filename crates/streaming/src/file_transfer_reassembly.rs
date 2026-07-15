@@ -158,8 +158,8 @@ mod tests {
             TransferSource::DragDrop,
             vec![
                 TransferEntry::dir("photos").unwrap(),
-                TransferEntry::file("photos/a.bin", 2048).unwrap(),
-                TransferEntry::file("photos/b.bin", 1536).unwrap(),
+                TransferEntry::file("photos/a.bin", 2048, [1; 32]).unwrap(),
+                TransferEntry::file("photos/b.bin", 1536, [2; 32]).unwrap(),
             ],
         )
         .unwrap()
@@ -187,7 +187,8 @@ mod tests {
             1024,
             TransferCompressionPolicy::default(),
             Box::new(PlaintextTransferCipher),
-        );
+        )
+        .unwrap();
         let mut receiver = TransferReceiver::new(Box::new(PlaintextTransferCipher));
         let mut reassembler = TransferReassembler::new(&m);
 
@@ -258,5 +259,120 @@ mod tests {
             final_chunk_for_file: true,
         };
         assert!(matches!(r.accept(short), Err(TransferError::Codec(_))));
+    }
+
+    #[test]
+    fn receiver_checkpoint_resumes_by_manifest_entry_index() {
+        let m = manifest();
+        let mut sender = TransferSender::new(
+            m.id,
+            files(),
+            1024,
+            TransferCompressionPolicy::default(),
+            Box::new(PlaintextTransferCipher),
+        )
+        .unwrap();
+        let mut receiver = TransferReceiver::new(Box::new(PlaintextTransferCipher));
+        let mut reassembler = TransferReassembler::new(&m);
+
+        let first = sender.next_chunk().unwrap().unwrap();
+        let sender_checkpoint = sender.checkpoint();
+        assert_eq!(
+            sender_checkpoint.file_index, 1,
+            "sender checkpoints must use manifest indexes"
+        );
+        let decoded = receiver.accept(first).unwrap();
+        assert!(reassembler.accept(decoded).unwrap().is_none());
+        let checkpoint = receiver.checkpoint().unwrap();
+        assert_eq!(
+            checkpoint.file_index, 1,
+            "directory occupies manifest index 0"
+        );
+
+        let mut resumed = TransferSender::from_checkpoint(
+            checkpoint,
+            files(),
+            1024,
+            TransferCompressionPolicy::default(),
+            Box::new(PlaintextTransferCipher),
+        )
+        .unwrap();
+        let mut completed = Vec::new();
+        while let Some(chunk) = resumed.next_chunk().unwrap() {
+            let decoded = receiver.accept(chunk).unwrap();
+            if let Some(file) = reassembler.accept(decoded).unwrap() {
+                completed.push(file);
+            }
+        }
+
+        assert!(reassembler.is_complete());
+        assert_eq!(completed.len(), 2);
+        assert_eq!(completed[0].entry_index, 1);
+        assert_eq!(completed[0].bytes, Bytes::from(vec![b'a'; 2048]));
+        assert_eq!(completed[1].entry_index, 2);
+        assert_eq!(completed[1].bytes, Bytes::from(vec![b'b'; 1536]));
+    }
+
+    #[test]
+    fn end_to_end_completes_zero_byte_file() {
+        let id = TransferId::generate();
+        let manifest = TransferManifest::new(
+            id,
+            DeviceId::generate(),
+            None,
+            TransferSource::DragDrop,
+            vec![
+                TransferEntry::dir("empty-dir").unwrap(),
+                TransferEntry::file("empty-dir/empty.txt", 0, [3; 32]).unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut sender = TransferSender::new(
+            id,
+            vec![TransferFileData {
+                entry_index: 1,
+                bytes: Bytes::new(),
+            }],
+            1024,
+            TransferCompressionPolicy::default(),
+            Box::new(PlaintextTransferCipher),
+        )
+        .unwrap();
+        let mut receiver = TransferReceiver::new(Box::new(PlaintextTransferCipher));
+        let mut reassembler = TransferReassembler::new(&manifest);
+
+        let chunk = sender
+            .next_chunk()
+            .unwrap()
+            .expect("empty files still require a final marker chunk");
+        assert_eq!(chunk.file_index, 1);
+        assert_eq!(chunk.plain_len, 0);
+        assert!(chunk.final_chunk_for_file);
+        let decoded = receiver.accept(chunk).unwrap();
+        let checkpoint = receiver.checkpoint().unwrap();
+        let completed = reassembler
+            .accept(decoded)
+            .unwrap()
+            .expect("empty file should complete");
+
+        assert!(completed.bytes.is_empty());
+        assert!(reassembler.is_complete());
+        assert!(sender.next_chunk().unwrap().is_none());
+
+        let mut resumed = TransferSender::from_checkpoint(
+            checkpoint,
+            vec![TransferFileData {
+                entry_index: 1,
+                bytes: Bytes::new(),
+            }],
+            1024,
+            TransferCompressionPolicy::default(),
+            Box::new(PlaintextTransferCipher),
+        )
+        .unwrap();
+        assert!(
+            resumed.next_chunk().unwrap().is_none(),
+            "resuming after a completed empty file must not emit it twice"
+        );
     }
 }

@@ -32,6 +32,17 @@ use crate::{DiscoveredDevice, Discovery, DiscoveryError};
 /// Max UDP announcement datagram we will read.
 const RECV_BUF: usize = 2 * 1024;
 
+fn lock_recovering<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("recovering poisoned UDP discovery mutex");
+            mutex.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Tunables for the UDP backend.
 #[derive(Debug, Clone)]
 pub struct UdpConfig {
@@ -128,10 +139,7 @@ impl UdpDiscovery {
                 registry.observe(device, Instant::now());
             }
         });
-        self.tasks
-            .lock()
-            .expect("tasks mutex poisoned")
-            .push(handle);
+        lock_recovering(&self.tasks).push(handle);
     }
 
     fn spawn_broadcast_loop(&self) {
@@ -144,7 +152,7 @@ impl UdpDiscovery {
             loop {
                 ticker.tick().await;
                 // Clone the current announcement out of the lock before any await.
-                let current = announcement.lock().expect("ann mutex poisoned").clone();
+                let current = lock_recovering(&announcement).clone();
                 if let Some(ann) = current
                     && let Ok(bytes) = ann.encode()
                 {
@@ -152,19 +160,14 @@ impl UdpDiscovery {
                 }
             }
         });
-        self.tasks
-            .lock()
-            .expect("tasks mutex poisoned")
-            .push(handle);
+        lock_recovering(&self.tasks).push(handle);
     }
 }
 
 impl Drop for UdpDiscovery {
     fn drop(&mut self) {
-        if let Ok(tasks) = self.tasks.lock() {
-            for handle in tasks.iter() {
-                handle.abort();
-            }
+        for handle in lock_recovering(&self.tasks).iter() {
+            handle.abort();
         }
     }
 }
@@ -182,7 +185,7 @@ impl Discovery for UdpDiscovery {
             ann = ann.with_fingerprint(fingerprint);
         }
         let start_loop = {
-            let mut guard = self.announcement.lock().expect("ann mutex poisoned");
+            let mut guard = lock_recovering(&self.announcement);
             let first = guard.is_none();
             *guard = Some(ann);
             first
@@ -271,6 +274,51 @@ mod tests {
 
         let found = wait_for_peer(&backend, own.id).await;
         assert!(!found, "device must not discover itself");
+    }
+
+    #[tokio::test]
+    async fn poisoned_runtime_mutexes_recover_without_panicking_or_leaking_tasks() {
+        fn poison<T>(mutex: &Mutex<T>) {
+            let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = mutex.lock().expect("fixture acquires healthy lock");
+                panic!("poison UDP discovery fixture");
+            }));
+            assert!(poisoned.is_err());
+        }
+
+        let backend = UdpDiscovery::bind(
+            DeviceId::generate(),
+            UdpConfig {
+                port: 0,
+                interval: Duration::from_secs(60),
+                ..UdpConfig::default()
+            },
+        )
+        .expect("bind fixture UDP backend");
+        poison(&backend.announcement);
+        poison(&backend.tasks);
+
+        let info = DeviceInfo::new("poison-safe", OsKind::MacOs);
+        backend
+            .advertise(&info, "127.0.0.1:47654".parse().unwrap(), None)
+            .await
+            .expect("poisoned locks recover");
+
+        assert!(
+            backend
+                .announcement
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+        );
+        assert!(
+            backend
+                .tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len()
+                >= 2
+        );
     }
 
     async fn wait_for_peer(backend: &UdpDiscovery, id: DeviceId) -> bool {

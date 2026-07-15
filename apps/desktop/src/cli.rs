@@ -48,6 +48,23 @@ pub enum Command {
         /// Address peers should dial (`ip:port`).
         addr: String,
     },
+    /// List encrypted local history containing local and received selections.
+    ClipboardHistory {
+        /// Emit machine-readable JSON for the GUI.
+        json: bool,
+    },
+    /// Restore one encrypted history entry to the platform pasteboard.
+    ClipboardRestore {
+        /// Hexadecimal content fingerprint printed by `clipboard-history`.
+        fingerprint: u64,
+    },
+    /// Remove every unpinned encrypted clipboard-history entry.
+    ClipboardClear,
+    /// Queue local files/directories for the selected authenticated peer.
+    FileSend {
+        /// Paths selected by the user. Filesystem validation happens at dispatch.
+        paths: Vec<String>,
+    },
     /// Validate a local simulation config.
     Simulate {
         /// Optional path to the simulation TOML.
@@ -134,12 +151,61 @@ where
             }
             Command::PairingUri { addr }
         }
+        Some("clipboard-history") => match it.next().as_deref() {
+            None => Command::ClipboardHistory { json: false },
+            Some("--json") if it.next().is_none() => Command::ClipboardHistory { json: true },
+            Some(_) => {
+                return Err("clipboard-history accepts only optional --json".to_string());
+            }
+        },
+        Some("clipboard-restore") => {
+            let fingerprint = it.next().ok_or_else(|| {
+                "clipboard-restore requires a hexadecimal fingerprint".to_string()
+            })?;
+            if it.next().is_some() {
+                return Err("clipboard-restore accepts one fingerprint".to_string());
+            }
+            let fingerprint = fingerprint.strip_prefix("0x").unwrap_or(&fingerprint);
+            let fingerprint = u64::from_str_radix(fingerprint, 16)
+                .map_err(|_| "clipboard-restore fingerprint must be hexadecimal".to_string())?;
+            Command::ClipboardRestore { fingerprint }
+        }
+        Some("clipboard-clear") => {
+            if it.next().is_some() {
+                return Err("clipboard-clear accepts no arguments".to_string());
+            }
+            Command::ClipboardClear
+        }
+        Some("file-send") => parse_file_send_args(it)?,
         Some("simulate") => parse_simulate_args(it)?,
         Some("help" | "--help" | "-h") => Command::Help,
         Some(other) => return Err(format!("unknown command `{other}`; run `nexkvm help`")),
     };
 
     Ok(Invocation { command, debug })
+}
+
+fn parse_file_send_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut paths = Vec::new();
+    let mut options_ended = false;
+    for arg in args {
+        if !options_ended && arg == "--" {
+            options_ended = true;
+        } else if !options_ended && arg.starts_with('-') {
+            return Err(format!(
+                "file-send does not accept option `{arg}`; use `--` before a path beginning with `-`"
+            ));
+        } else {
+            paths.push(arg);
+        }
+    }
+    if paths.is_empty() {
+        return Err("file-send requires at least one file or directory path".to_string());
+    }
+    Ok(Command::FileSend { paths })
 }
 
 fn parse_pair_args<I>(args: I) -> Result<Command, String>
@@ -252,6 +318,10 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm devices             List trusted (paired) devices\n");
     out.push_str("  nexkvm pair [--accept] <uri> Decode or accept a pairing bootstrap\n");
     out.push_str("  nexkvm pairing-uri <addr>  Print this device's pairing bootstrap URI\n");
+    out.push_str("  nexkvm clipboard-history [--json] List encrypted clipboard history\n");
+    out.push_str("  nexkvm clipboard-restore <hex> Restore a clipboard history entry\n");
+    out.push_str("  nexkvm clipboard-clear      Clear unpinned clipboard history\n");
+    out.push_str("  nexkvm file-send <path...>  Queue files/directories for the selected peer\n");
     out.push_str("  nexkvm permissions         Request/report required macOS permissions\n");
     out.push_str("  nexkvm portal-smoke       Test Linux Wayland portal grant/barrier/EIS flow\n");
     out.push_str("  nexkvm pipewire-smoke     Test Linux PipeWire ScreenCast portal/frame flow\n");
@@ -402,6 +472,7 @@ pub fn format_macos_input_report(
         let _ = writeln!(out, "  next step: {next_step}");
     }
     if !can_capture_input || !can_inject_input {
+        let _ = writeln!(out, "  interactive permission command: nexkvm permissions");
         let _ = writeln!(
             out,
             "  after granting permission: restart nexkvm after granting permission"
@@ -524,6 +595,25 @@ mod tests {
     #[test]
     fn unknown_command_is_rejected() {
         assert!(parse(["frobnicate"]).is_err());
+    }
+
+    #[test]
+    fn file_send_requires_paths_and_rejects_accidental_options() {
+        assert!(parse(["file-send"]).is_err());
+        assert!(parse(["file-send", "--recursive", "folder"]).is_err());
+        assert_eq!(
+            parse(["file-send", "b.txt", "folder"]).unwrap().command,
+            Command::FileSend {
+                paths: vec!["b.txt".into(), "folder".into()]
+            }
+        );
+        assert_eq!(
+            parse(["file-send", "--", "-notes.txt"]).unwrap().command,
+            Command::FileSend {
+                paths: vec!["-notes.txt".into()]
+            }
+        );
+        assert!(help_text().contains("nexkvm file-send <path...>"));
     }
 
     #[test]
@@ -776,6 +866,7 @@ mod tests {
         assert!(rendered.contains("inject ready: false"));
         assert!(rendered.contains("Grant Accessibility permission"));
         assert!(rendered.contains("System Settings"));
+        assert!(rendered.contains("nexkvm permissions"));
         assert!(rendered.contains("restart nexkvm after granting permission"));
     }
 
@@ -808,5 +899,31 @@ mod tests {
 
         assert!(rendered.contains("active peer: unset"));
         assert!(rendered.contains("explicit connect: disabled"));
+    }
+
+    #[test]
+    fn clipboard_history_commands_are_strictly_parsed() {
+        assert_eq!(
+            parse(["clipboard-history", "--json"]).unwrap().command,
+            Command::ClipboardHistory { json: true }
+        );
+        assert_eq!(
+            parse(["clipboard-history"]).unwrap().command,
+            Command::ClipboardHistory { json: false }
+        );
+        assert_eq!(
+            parse(["clipboard-restore", "00000000000000ff"])
+                .unwrap()
+                .command,
+            Command::ClipboardRestore { fingerprint: 255 }
+        );
+        assert_eq!(
+            parse(["clipboard-clear"]).unwrap().command,
+            Command::ClipboardClear
+        );
+        assert!(parse(["clipboard-history", "extra"]).is_err());
+        assert!(parse(["clipboard-restore"]).is_err());
+        assert!(parse(["clipboard-restore", "not-hex"]).is_err());
+        assert!(parse(["clipboard-clear", "extra"]).is_err());
     }
 }

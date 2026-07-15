@@ -108,9 +108,10 @@ impl ReconnectPlanner {
             .iter()
             .map(|device| device.info.id)
             .collect::<HashSet<_>>();
-        self.state.retain(|id, state| {
-            !matches!(state, DeviceState::Connected) || visible_ids.contains(id)
-        });
+        // Discovery already applies its own visibility TTL. Once a peer is no
+        // longer visible, every planner state for it is stale: retaining a
+        // failed backoff would unnecessarily delay a freshly reappearing peer.
+        self.state.retain(|id, _state| visible_ids.contains(id));
 
         let mut targets = Vec::new();
         for device in visible.iter().filter(|d| is_trusted(d)) {
@@ -255,5 +256,30 @@ mod tests {
         let targets = planner.due(&visible, |_| true, t0 + Duration::from_secs(61));
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].attempt, 0);
+    }
+
+    #[test]
+    fn disappearing_peer_clears_failed_backoff_state() {
+        let policy = ReconnectPolicy {
+            base: Duration::from_secs(10),
+            max: Duration::from_secs(30),
+            multiplier: 2.0,
+        };
+        let mut planner = ReconnectPlanner::new(policy);
+        let dev = device("d", Some("fp"));
+        let visible = vec![dev.clone()];
+        let t0 = Instant::now();
+
+        assert_eq!(planner.due(&visible, |_| true, t0).len(), 1);
+        planner.record_failure(dev.info.id, t0);
+
+        assert!(planner.due(&[], |_| true, t0).is_empty());
+        let targets = planner.due(&visible, |_| true, t0 + Duration::from_millis(1));
+        assert_eq!(
+            targets.len(),
+            1,
+            "reappearing peer must be retried promptly"
+        );
+        assert_eq!(targets[0].attempt, 0, "stale failures must be forgotten");
     }
 }

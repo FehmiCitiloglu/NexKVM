@@ -144,10 +144,36 @@ pub fn compress_with_policy(
 /// # Errors
 /// Returns [`TransferError::Compression`] or [`TransferError::Unsupported`].
 pub fn decompress(alg: TransferCompression, compressed: &[u8]) -> Result<Vec<u8>, TransferError> {
+    decompress_bounded(alg, compressed, crate::MAX_TRANSFER_CHUNK_SIZE)
+}
+
+/// Decompress bytes while enforcing an explicit decoded-output limit.
+///
+/// At most `max_output + 1` bytes are read from the decoder, preventing a
+/// compressed chunk from allocating an unbounded buffer before validation.
+///
+/// # Errors
+/// Returns [`TransferError::TooLarge`] when decoded output exceeds
+/// `max_output`, or the same codec/feature errors as [`decompress`].
+pub fn decompress_bounded(
+    alg: TransferCompression,
+    compressed: &[u8],
+    max_output: usize,
+) -> Result<Vec<u8>, TransferError> {
     match alg {
-        TransferCompression::None => Ok(compressed.to_vec()),
-        TransferCompression::Deflate => deflate_decompress(compressed),
+        TransferCompression::None => bounded_identity(compressed, max_output),
+        TransferCompression::Deflate => deflate_decompress_bounded(compressed, max_output),
     }
+}
+
+fn bounded_identity(compressed: &[u8], max_output: usize) -> Result<Vec<u8>, TransferError> {
+    if compressed.len() > max_output {
+        return Err(TransferError::TooLarge {
+            size: compressed.len(),
+            limit: max_output,
+        });
+    }
+    Ok(compressed.to_vec())
 }
 
 #[cfg(feature = "transfer-compression")]
@@ -174,16 +200,29 @@ fn deflate_compress_with_policy(
 }
 
 #[cfg(feature = "transfer-compression")]
-fn deflate_decompress(compressed: &[u8]) -> Result<Vec<u8>, TransferError> {
+fn deflate_decompress_bounded(
+    compressed: &[u8],
+    max_output: usize,
+) -> Result<Vec<u8>, TransferError> {
     use std::io::Read;
 
     use flate2::read::DeflateDecoder;
 
-    let mut decoder = DeflateDecoder::new(compressed);
+    let decoder = DeflateDecoder::new(compressed);
+    let read_limit = u64::try_from(max_output)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     let mut out = Vec::new();
     decoder
+        .take(read_limit)
         .read_to_end(&mut out)
         .map_err(|e| TransferError::Compression(e.to_string()))?;
+    if out.len() > max_output {
+        return Err(TransferError::TooLarge {
+            size: out.len(),
+            limit: max_output,
+        });
+    }
     Ok(out)
 }
 
@@ -205,7 +244,10 @@ fn deflate_compress_with_policy(
 }
 
 #[cfg(not(feature = "transfer-compression"))]
-fn deflate_decompress(_compressed: &[u8]) -> Result<Vec<u8>, TransferError> {
+fn deflate_decompress_bounded(
+    _compressed: &[u8],
+    _max_output: usize,
+) -> Result<Vec<u8>, TransferError> {
     Err(TransferError::Unsupported(
         "deflate (compression feature off)",
     ))
@@ -243,5 +285,20 @@ mod tests {
         assert!(c.len() < data.len());
         let d = decompress(TransferCompression::Deflate, &c).unwrap();
         assert_eq!(d, data);
+    }
+
+    #[cfg(feature = "transfer-compression")]
+    #[test]
+    fn deflate_rejects_output_past_limit() {
+        let data = vec![b'z'; 4096];
+        let compressed = compress(TransferCompression::Deflate, &data).unwrap();
+
+        assert!(matches!(
+            decompress_bounded(TransferCompression::Deflate, &compressed, 1024),
+            Err(TransferError::TooLarge {
+                size: 1025,
+                limit: 1024
+            })
+        ));
     }
 }

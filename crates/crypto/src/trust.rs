@@ -1,7 +1,7 @@
 //! Trust store: the set of devices this device has paired with.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -71,36 +71,33 @@ impl InMemoryTrustStore {
     /// Snapshot of all trusted entries.
     #[must_use]
     pub fn entries(&self) -> Vec<TrustEntry> {
-        self.entries
-            .lock()
-            .expect("trust mutex poisoned")
-            .values()
-            .cloned()
-            .collect()
+        self.lock_entries().values().cloned().collect()
+    }
+
+    fn lock_entries(&self) -> MutexGuard<'_, HashMap<PublicKey, TrustEntry>> {
+        match self.entries.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // HashMap preserves its memory-safety invariants across unwind.
+                // TrustStore's infallible API must remain usable for revocation.
+                self.entries.clear_poison();
+                poisoned.into_inner()
+            }
+        }
     }
 }
 
 impl TrustStore for InMemoryTrustStore {
     fn get(&self, key: &PublicKey) -> Option<TrustEntry> {
-        self.entries
-            .lock()
-            .expect("trust mutex poisoned")
-            .get(key)
-            .cloned()
+        self.lock_entries().get(key).cloned()
     }
 
     fn insert(&self, entry: TrustEntry) {
-        self.entries
-            .lock()
-            .expect("trust mutex poisoned")
-            .insert(entry.public_key.clone(), entry);
+        self.lock_entries().insert(entry.public_key.clone(), entry);
     }
 
     fn remove(&self, key: &PublicKey) {
-        self.entries
-            .lock()
-            .expect("trust mutex poisoned")
-            .remove(key);
+        self.lock_entries().remove(key);
     }
 }
 
@@ -141,5 +138,24 @@ mod tests {
     fn from_entries_seeds_store() {
         let store = InMemoryTrustStore::from_entries([entry("a", &[1]), entry("b", &[2])]);
         assert_eq!(store.entries().len(), 2);
+    }
+
+    #[test]
+    fn poisoned_mutex_does_not_panic_or_disable_trust_store_operations() {
+        let store = InMemoryTrustStore::from_entries([entry("existing", &[1])]);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.entries.lock().expect("fixture acquires healthy lock");
+            panic!("poison trust fixture");
+        }));
+        assert!(poisoned.is_err());
+
+        let added = entry("added", &[2]);
+        let added_key = added.public_key.clone();
+        store.insert(added.clone());
+
+        assert_eq!(store.get(&added_key), Some(added));
+        assert_eq!(store.entries().len(), 2);
+        store.remove(&added_key);
+        assert!(!store.is_trusted(&added_key));
     }
 }

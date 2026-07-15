@@ -12,9 +12,13 @@
 //! - macOS: `~/Library/Application Support/nexkvm/config.toml`
 //! - Windows: `%APPDATA%\nexkvm\config.toml`
 //!
-//! Secrets (private keys, paired-device material) are **not** stored in this
-//! TOML file — they belong in the OS keychain, wired up in a later phase.
+//! Secrets are **not** stored in this TOML file. The current supported path uses
+//! separate owner-only filesystem stores for the long-term identity and encrypted
+//! clipboard-history key; see `docs/security.md` for their exact protections and
+//! limitations. Paired-device records contain public keys and metadata only.
 
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use nexkvm_core::identity::OsKind;
@@ -22,9 +26,16 @@ use nexkvm_telemetry::TelemetryConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod bounded_file;
+mod clipboard_history;
+
 mod identity;
 mod trust;
 
+pub use clipboard_history::{
+    ArchivedClipboardEntry, ClipboardHistoryArchive, ClipboardHistoryArchiveConfig,
+    ClipboardHistoryStoreError,
+};
 pub use identity::{FileDeviceIdentityStore, IdentityStoreError};
 pub use trust::{FileTrustStore, TrustStoreError};
 
@@ -42,7 +53,20 @@ pub enum ConfigError {
     /// Failed to serialize TOML.
     #[error("config serialize error: {0}")]
     Serialize(#[from] toml::ser::Error),
+
+    /// The configured path is a symlink or does not name a regular file.
+    #[error("config path is a symlink or non-regular file")]
+    UnsafePath,
+
+    /// The config exceeds the bounded read/write size.
+    #[error("config exceeds the {limit}-byte size limit")]
+    TooLarge {
+        /// Maximum accepted serialized config size.
+        limit: u64,
+    },
 }
+
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// Top-level configuration, one section per subsystem.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -58,6 +82,8 @@ pub struct Config {
     pub input: InputConfig,
     /// Clipboard runtime settings.
     pub clipboard: ClipboardConfig,
+    /// Trusted-peer file transfer settings.
+    pub file_transfer: FileTransferConfig,
     /// Logging/diagnostics.
     pub telemetry: TelemetryConfig,
     /// Plugin runtime settings.
@@ -94,7 +120,9 @@ pub struct NetworkConfig {
     pub connect_addr: Option<String>,
     /// Whether to advertise this device on the LAN for discovery.
     pub enable_discovery: bool,
-    /// Preferred transports in priority order (e.g. `["quic", "tcp"]`).
+    /// Legacy transport preference retained for configuration compatibility.
+    /// The supported desktop runtime currently uses TCP only and warns when this
+    /// list contains unsupported values.
     pub transports: Vec<String>,
 }
 
@@ -104,7 +132,7 @@ impl Default for NetworkConfig {
             listen_port: 47_654,
             connect_addr: None,
             enable_discovery: true,
-            transports: vec!["quic".into(), "tcp".into()],
+            transports: vec!["tcp".into()],
         }
     }
 }
@@ -115,7 +143,9 @@ impl Default for NetworkConfig {
 pub struct SecurityConfig {
     /// Require explicit pairing before accepting any session.
     pub require_pairing: bool,
-    /// Auto-accept reconnects from already-trusted devices.
+    /// Deprecated compatibility field; the supported runtime currently ignores
+    /// this value and reconnects pinned peers whenever discovery is enabled.
+    /// Disable LAN discovery to disable automatic trusted-peer rediscovery.
     pub trust_on_reconnect: bool,
 }
 
@@ -188,11 +218,54 @@ pub enum InputControlRole {
 }
 
 /// `[clipboard]` section.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ClipboardConfig {
     /// Enable runtime clipboard synchronization with trusted peers.
     pub sync_enabled: bool,
+    /// Retain non-secret local and received selections in encrypted history.
+    pub history_enabled: bool,
+    /// Maximum selections retained in encrypted history.
+    pub history_capacity: usize,
+    /// Maximum compact size of one retained selection.
+    pub history_max_entry_bytes: usize,
+}
+
+impl Default for ClipboardConfig {
+    fn default() -> Self {
+        Self {
+            sync_enabled: false,
+            history_enabled: false,
+            history_capacity: 50,
+            history_max_entry_bytes: 2 * 1024 * 1024,
+        }
+    }
+}
+
+/// `[file_transfer]` section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileTransferConfig {
+    /// Enable sending and receiving files over authenticated trusted sessions.
+    pub enabled: bool,
+    /// Optional receive directory; the platform Downloads directory is used
+    /// when unset.
+    pub download_dir: Option<String>,
+    /// Maximum aggregate bytes accepted for one transfer.
+    pub max_transfer_bytes: u64,
+    /// Maximum number of manifest entries accepted for one transfer.
+    pub max_entries: usize,
+}
+
+impl Default for FileTransferConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            download_dir: None,
+            max_transfer_bytes: 10 * 1024 * 1024 * 1024,
+            max_entries: 1_024,
+        }
+    }
 }
 
 /// `[plugins]` section.
@@ -271,29 +344,151 @@ impl Config {
     /// Load configuration from `path`, returning defaults if it does not exist.
     ///
     /// # Errors
-    /// Returns [`ConfigError`] on I/O failure (other than not-found) or parse
-    /// failure.
+    /// Returns [`ConfigError`] on I/O failure (other than not-found), an unsafe
+    /// file type, an oversized file, or a parse failure.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(ConfigError::Io(e)),
+        match read_config_text(path.as_ref())? {
+            Some(text) => Ok(toml::from_str(&text)?),
+            None => Ok(Self::default()),
         }
     }
 
     /// Serialize and write configuration to `path`, creating parent dirs.
     ///
     /// # Errors
-    /// Returns [`ConfigError`] on serialization or I/O failure.
+    /// Returns [`ConfigError`] on serialization or I/O failure, an unsafe
+    /// target type, or an oversized serialized configuration.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), ConfigError> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if path.file_name().is_none() {
+            return Err(ConfigError::UnsafePath);
         }
         let text = toml::to_string_pretty(self)?;
-        std::fs::write(path, text)?;
+        if text.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(ConfigError::TooLarge {
+                limit: MAX_CONFIG_BYTES,
+            });
+        }
+
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        create_config_parent(parent)?;
+        validate_config_target(path)?;
+
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".nexkvm-config-")
+            .suffix(".tmp")
+            .tempfile_in(parent)?;
+        harden_config_permissions(temporary.as_file())?;
+        temporary.write_all(text.as_bytes())?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+
+        // Revalidate immediately before publication. Renaming a same-directory
+        // temporary file never exposes a partially written configuration.
+        validate_config_target(path)?;
+        let persisted = temporary
+            .persist(path)
+            .map_err(|error| ConfigError::Io(error.error))?;
+        persisted.sync_all()?;
+        sync_config_parent(parent)?;
         Ok(())
     }
+}
+
+fn read_config_text(path: &Path) -> Result<Option<String>, ConfigError> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(ConfigError::UnsafePath);
+    }
+    if metadata.len() > MAX_CONFIG_BYTES {
+        return Err(ConfigError::TooLarge {
+            limit: MAX_CONFIG_BYTES,
+        });
+    }
+
+    let file = File::open(path)?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() {
+        return Err(ConfigError::UnsafePath);
+    }
+    if opened_metadata.len() > MAX_CONFIG_BYTES {
+        return Err(ConfigError::TooLarge {
+            limit: MAX_CONFIG_BYTES,
+        });
+    }
+    validate_config_target(path)?;
+
+    let capacity = usize::try_from(opened_metadata.len().min(MAX_CONFIG_BYTES)).map_err(|_| {
+        ConfigError::TooLarge {
+            limit: MAX_CONFIG_BYTES,
+        }
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(ConfigError::TooLarge {
+            limit: MAX_CONFIG_BYTES,
+        });
+    }
+    let text = String::from_utf8(bytes).map_err(|error| {
+        ConfigError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })?;
+    Ok(Some(text))
+}
+
+fn validate_config_target(path: &Path) -> Result<(), ConfigError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(ConfigError::UnsafePath)
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(unix)]
+fn create_config_parent(parent: &Path) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)
+}
+
+#[cfg(not(unix))]
+fn create_config_parent(parent: &Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(parent)
+}
+
+#[cfg(unix)]
+fn harden_config_permissions(file: &File) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn harden_config_permissions(_file: &File) -> Result<(), std::io::Error> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_config_parent(parent: &Path) -> Result<(), std::io::Error> {
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_config_parent(_parent: &Path) -> Result<(), std::io::Error> {
+    Ok(())
 }
 
 fn default_device_name() -> String {
@@ -354,6 +549,13 @@ mod tests {
             cfg.input.emergency_stop_keycode
         );
         assert_eq!(parsed.clipboard.sync_enabled, cfg.clipboard.sync_enabled);
+    }
+
+    #[test]
+    fn network_defaults_to_the_only_supported_tcp_transport() {
+        let cfg = Config::default();
+
+        assert_eq!(cfg.network.transports, ["tcp"]);
     }
 
     #[test]
@@ -437,5 +639,115 @@ transports = ["tcp"]
         cfg.save(&path).unwrap();
         let loaded = Config::load(&path).unwrap();
         assert_eq!(loaded.device.name, "Test Device");
+    }
+
+    #[test]
+    fn oversized_config_is_rejected_before_reading_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_CONFIG_BYTES + 1).unwrap();
+
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn oversized_save_does_not_replace_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut initial = Config::default();
+        initial.device.name = "Old Device".into();
+        initial.save(&path).unwrap();
+
+        let mut oversized = Config::default();
+        oversized.device.name = "x".repeat(MAX_CONFIG_BYTES as usize + 1);
+        assert!(matches!(
+            oversized.save(&path),
+            Err(ConfigError::TooLarge { .. })
+        ));
+        assert_eq!(Config::load(path).unwrap().device.name, "Old Device");
+    }
+
+    #[test]
+    fn non_regular_config_target_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::create_dir(&path).unwrap();
+
+        assert!(matches!(Config::load(&path), Err(ConfigError::UnsafePath)));
+        assert!(matches!(
+            Config::default().save(&path),
+            Err(ConfigError::UnsafePath)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_config_target_is_rejected_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.toml");
+        std::fs::write(&target, b"unchanged").unwrap();
+        let path = dir.path().join("config.toml");
+        symlink(&target, &path).unwrap();
+
+        assert!(matches!(Config::load(&path), Err(ConfigError::UnsafePath)));
+        assert!(matches!(
+            Config::default().save(&path),
+            Err(ConfigError::UnsafePath)
+        ));
+        assert_eq!(std::fs::read(target).unwrap(), b"unchanged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_creates_owner_only_config_file_and_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("nested").join("nexkvm");
+        let path = config_dir.join("config.toml");
+
+        Config::default().save(&path).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(dir.path().join("nested"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&config_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_atomically_replaces_an_existing_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let old_view = dir.path().join("old-config.toml");
+        let mut initial = Config::default();
+        initial.device.name = "Old Device".into();
+        initial.save(&path).unwrap();
+        std::fs::hard_link(&path, &old_view).unwrap();
+
+        let mut replacement = Config::default();
+        replacement.device.name = "New Device".into();
+        replacement.save(&path).unwrap();
+
+        assert_eq!(Config::load(&path).unwrap().device.name, "New Device");
+        assert_eq!(Config::load(&old_view).unwrap().device.name, "Old Device");
     }
 }

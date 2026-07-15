@@ -4,7 +4,14 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# `ttf-parser` is pulled in by egui's text rasterizer. RUSTSEC-2026-0192 is an
+# unmaintained notice (not a vulnerability), has no safe upgrade, and cannot be
+# removed until egui migrates its font stack. Keep the exception narrow and
+# continue denying every other advisory.
+ignore = [
+    { id = "RUSTSEC-2026-0192", reason = "egui's current font rasterizer depends on ttf-parser; the advisory is unmaintained-only and provides no safe upgrade" },
+    { crate = "spin@0.9.8", reason = "latest mdns-sd depends on flume 0.12, which pins this yanked MIT crate; no RustSec vulnerability is associated with the yank" },
+]
 
 [licenses]
 version = 2
@@ -14,10 +21,11 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "CDLA-Permissive-2.0",
     "ISC",
+    "LicenseRef-UFL-1.0",
     "MIT",
     "MPL-2.0",
+    "OFL-1.1",
     "Unicode-3.0",
     "Zlib",
 ]

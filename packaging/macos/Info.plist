@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>nexkvm</string>
+  <string>NexKVM</string>
   <key>CFBundleExecutable</key>
-  <string>nexkvm</string>
+  <string>nexkvm-gui</string>
   <key>CFBundleIdentifier</key>
   <string>dev.nexkvm.desktop</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>nexkvm</string>
+  <string>NexKVM</string>
   <key>CFBundleIconFile</key>
   <string>nexkvm</string>
   <key>CFBundlePackageType</key>
@@ -24,6 +24,12 @@
   <string>12.0</string>
   <key>NSInputMonitoringUsageDescription</key>
   <string>NexKVM needs Input Monitoring to capture keyboard and mouse input for sharing with your trusted devices.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>NexKVM uses your local network to discover and connect to trusted computers.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_nexkvm._udp</string>
+  </array>
   <key>NSAppleEventsUsageDescription</key>
   <string>NexKVM may use Apple Events only for trusted local automation integrations.</string>
 </dict>

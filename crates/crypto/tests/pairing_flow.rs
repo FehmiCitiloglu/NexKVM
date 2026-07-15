@@ -21,8 +21,8 @@ fn two_devices_pair_via_qr_and_pin_each_other() {
     let now = Instant::now();
 
     // Each device owns a long-lived identity and a local trust store.
-    let mac = identity("Alien's MacBook", &[0x11, 0x22, 0x33, 0x44]);
-    let phone = identity("Alien's Phone", &[0xAA, 0xBB, 0xCC, 0xDD]);
+    let mac = identity("Alien's MacBook", &[0x11; 32]);
+    let phone = identity("Alien's Phone", &[0xAA; 32]);
     let mac_store = InMemoryTrustStore::new();
     let phone_store = InMemoryTrustStore::new();
 
@@ -35,7 +35,7 @@ fn two_devices_pair_via_qr_and_pin_each_other() {
         now,
         DEFAULT_PAIRING_TTL,
     );
-    let uri = mac_session.bootstrap().unwrap().to_uri();
+    let uri = mac_session.bootstrap().unwrap().to_uri().unwrap();
 
     // 2. Responder (Phone) scans the QR (parses the URI) and starts its side.
     let scanned = PairingBootstrap::from_uri(&uri).unwrap();

@@ -31,6 +31,11 @@ pub use permissions::{MacosInputPermissionReport, MacosPermissionState};
 pub use screen_capture::MacosScreenCapture;
 pub use screen_encoder::MacosVideoToolboxEncoder;
 
+/// Private CoreGraphics source-user-data marker placed on every event posted
+/// by NexKVM. Capture uses the same stable value to prevent injected events
+/// from feeding back into another `Both`-role peer session.
+pub(crate) const NEXKVM_EVENT_SOURCE_USER_DATA: i64 = 0x4E65_784B_564D_0001;
+
 /// macOS implementation of [`PlatformBackend`].
 #[derive(Debug)]
 pub struct MacosBackend {

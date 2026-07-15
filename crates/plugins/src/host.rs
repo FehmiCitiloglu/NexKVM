@@ -128,7 +128,7 @@ impl EventHook {
         match self {
             Self::Clipboard => granted.read_clipboard,
             Self::Input => granted.read_input,
-            Self::FileTransfer => granted.read_clipboard,
+            Self::FileTransfer => granted.read_file_transfer,
             Self::Network => granted.network_send,
             Self::Stream => granted.audio_control,
         }
@@ -221,6 +221,16 @@ mod tests {
         let hook = EventHook::for_message(MessageKind::Clipboard).unwrap();
         assert!(hook.is_permitted(&caps_with_clipboard()));
         assert!(!hook.is_permitted(&PluginCapabilities::none()));
+    }
+
+    #[test]
+    fn file_transfer_hook_requires_its_own_capability() {
+        let hook = EventHook::for_message(MessageKind::FileTransfer).unwrap();
+        assert!(!hook.is_permitted(&caps_with_clipboard()));
+        assert!(hook.is_permitted(&PluginCapabilities {
+            read_file_transfer: true,
+            ..PluginCapabilities::none()
+        }));
     }
 
     #[test]

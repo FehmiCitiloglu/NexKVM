@@ -32,11 +32,13 @@ async-trait.workspace = true
 bytes.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+getrandom.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 serde.workspace = true
 toml.workspace = true
+uuid.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nexkvm-platform-macos.workspace = true

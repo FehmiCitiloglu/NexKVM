@@ -91,11 +91,11 @@ fn pair_decodes_a_bootstrap_uri() {
 
     let bootstrap = PairingBootstrap::new(
         "studio-mac",
-        PublicKey(vec![1, 2, 3, 4, 5]),
+        PublicKey(vec![1; 32]),
         [0u8; nexkvm_crypto::NONCE_LEN],
         "192.168.1.20:47654",
     );
-    let uri = bootstrap.to_uri();
+    let uri = bootstrap.to_uri().unwrap();
 
     let output = nexkvm()
         .args(["pair", &uri])
@@ -152,6 +152,81 @@ fn pairing_uri_reuses_persisted_identity_key() {
         .expect("second uri");
 
     assert_eq!(first.public_key, second.public_key);
+    assert_ne!(
+        first.nonce, second.nonce,
+        "pairing nonces must be freshly random"
+    );
+}
+
+#[test]
+fn pairing_uri_rejects_addresses_the_other_mac_cannot_dial() {
+    let config_home = temp_config_home("pairing-uri-unreachable-address");
+    for address in [
+        "127.0.0.1:47654",
+        "[::1]:47654",
+        "0.0.0.0:47654",
+        "192.168.1.40:0",
+        "studio-mac.local:47654",
+    ] {
+        let output = nexkvm()
+            .env("XDG_CONFIG_HOME", &config_home)
+            .args(["pairing-uri", address])
+            .output()
+            .expect("run nexkvm pairing-uri with an unreachable address");
+
+        assert!(
+            !output.status.success(),
+            "pairing-uri unexpectedly accepted {address}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("reachable non-loopback unicast IP:port"),
+            "unexpected error for {address}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn doctor_reports_the_effective_required_pairing_policy() {
+    use nexkvm_storage::Config;
+
+    let config_home = temp_config_home("doctor-pairing-policy");
+    let mut config = Config::default();
+    config.security.require_pairing = false;
+    config.save(config_home.join("nexkvm/config.toml")).unwrap();
+    let output = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("doctor")
+        .output()
+        .expect("run nexkvm doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("pairing policy: required"));
+    assert!(!stdout.contains("require pairing: false"));
+    assert!(!stdout.contains("opened settings"));
+}
+
+#[test]
+fn doctor_reports_effective_tcp_and_warns_about_unsupported_preferences() {
+    use nexkvm_storage::Config;
+
+    let config_home = temp_config_home("doctor-effective-transport");
+    let mut config = Config::default();
+    config.network.transports = vec!["quic".into(), "tcp".into()];
+    config.save(config_home.join("nexkvm/config.toml")).unwrap();
+
+    let output = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("doctor")
+        .output()
+        .expect("run nexkvm doctor");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("effective transport: tcp"));
+    assert!(stdout.contains("unsupported configured transports ignored: quic"));
+    assert!(!stdout.contains("transports: quic,tcp"));
 }
 
 #[test]
@@ -161,11 +236,11 @@ fn pair_accept_persists_trusted_device() {
     let config_home = temp_config_home("pair-accept");
     let bootstrap = PairingBootstrap::new(
         "trusted-mac",
-        PublicKey(vec![9, 8, 7, 6, 5]),
+        PublicKey(vec![9; 32]),
         [3u8; nexkvm_crypto::NONCE_LEN],
         "192.168.1.30:47654",
     );
-    let uri = bootstrap.to_uri();
+    let uri = bootstrap.to_uri().unwrap();
 
     let output = nexkvm()
         .env("XDG_CONFIG_HOME", &config_home)
@@ -197,6 +272,123 @@ fn unknown_command_fails() {
         .output()
         .expect("run nexkvm frobnicate");
     assert!(!output.status.success());
+}
+
+#[test]
+fn file_send_queues_valid_sources_and_rejects_invalid_input() {
+    use nexkvm_storage::Config;
+
+    let config_home = temp_config_home("file-send");
+    let app_dir = config_home.join("nexkvm");
+    let config_path = app_dir.join("config.toml");
+    let mut config = Config::default();
+    config.file_transfer.enabled = true;
+    config.file_transfer.max_entries = 8;
+    config.file_transfer.max_transfer_bytes = 32;
+    config.save(&config_path).unwrap();
+
+    let source = config_home.join("share.txt");
+    std::fs::write(&source, b"trusted bytes").unwrap();
+    let output = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("file-send")
+        .arg(&source)
+        .output()
+        .expect("queue file transfer");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("queued file transfer"));
+    let queued = std::fs::read_dir(app_dir.join("file-transfer-queue"))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(queued.len(), 1);
+    let record = std::fs::read_to_string(queued[0].path()).unwrap();
+    assert!(record.contains("relative_path = \"share.txt\""));
+    assert!(!record.contains("trusted bytes"));
+
+    let missing = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["file-send", "does-not-exist"])
+        .output()
+        .expect("reject missing source");
+    assert!(!missing.status.success());
+
+    let empty = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("file-send")
+        .output()
+        .expect("reject empty source list");
+    assert!(!empty.status.success());
+}
+
+#[test]
+fn clipboard_history_cli_reads_and_clears_the_encrypted_archive() {
+    use nexkvm_clipboard::ClipboardSnapshot;
+    use nexkvm_core::DeviceId;
+    use nexkvm_storage::{ClipboardHistoryArchive, ClipboardHistoryArchiveConfig, Config};
+
+    let config_home = temp_config_home("clipboard-history");
+    let app_dir = config_home.join("nexkvm");
+    let config_path = app_dir.join("config.toml");
+    let mut config = Config::default();
+    config.clipboard.history_enabled = true;
+    config.save(&config_path).unwrap();
+    let archive_path = app_dir.join("clipboard-history.enc");
+    let mut archive = ClipboardHistoryArchive::open(
+        &archive_path,
+        ClipboardHistoryArchiveConfig {
+            capacity: config.clipboard.history_capacity,
+            max_entry_bytes: config.clipboard.history_max_entry_bytes,
+            max_archive_bytes: 32 * 1024 * 1024,
+        },
+    )
+    .unwrap();
+    assert!(archive.record(
+        ClipboardSnapshot::from_text("history from a trusted peer"),
+        DeviceId::generate(),
+        42,
+    ));
+    archive.persist().unwrap();
+
+    let output = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["clipboard-history", "--json"])
+        .output()
+        .expect("list clipboard history");
+    assert!(output.status.success());
+    let entries: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(entries.as_array().unwrap().len(), 1);
+    assert_eq!(
+        entries[0]["preview"],
+        serde_json::Value::String("history from a trusted peer".into())
+    );
+    assert!(
+        !std::fs::read(&archive_path)
+            .unwrap()
+            .windows(b"history from a trusted peer".len())
+            .any(|window| window == b"history from a trusted peer")
+    );
+
+    let clear = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .arg("clipboard-clear")
+        .output()
+        .expect("clear clipboard history");
+    assert!(clear.status.success());
+    let after = nexkvm()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["clipboard-history", "--json"])
+        .output()
+        .expect("list cleared history");
+    assert!(after.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&after.stdout).unwrap(),
+        serde_json::json!([])
+    );
 }
 
 #[test]
@@ -588,4 +780,22 @@ plugins = false
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unknown device os `beos`"));
+}
+
+#[test]
+fn checked_in_local_simulation_fixture_is_valid() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/sim/local-workspace.toml");
+    let output = nexkvm()
+        .arg("simulate")
+        .arg(fixture)
+        .arg("--simulate-json-only")
+        .output()
+        .expect("run the checked-in local simulation fixture");
+
+    assert!(
+        output.status.success(),
+        "checked-in simulation fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

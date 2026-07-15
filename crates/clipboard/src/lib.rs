@@ -41,7 +41,9 @@ mod sync;
 mod timeline;
 
 pub use cipher::{ClipboardCipher, PlaintextCipher, SessionClipboardCipher};
-pub use compression::{CompressionAlgorithm, CompressionPolicy, compress, decompress};
+pub use compression::{
+    CompressionAlgorithm, CompressionPolicy, compress, decompress, decompress_bounded,
+};
 pub use conflict::{ConflictResolver, InboundDecision, LocalDecision, OriginStamp};
 pub use content::{ClipboardContent, ClipboardFormat, ClipboardSnapshot, ContentFingerprint};
 pub use engine::ClipboardEngine;
@@ -85,6 +87,10 @@ pub enum ClipboardError {
         /// Maximum allowed.
         limit: usize,
     },
+
+    /// The logical sequence reached its maximum and cannot safely advance.
+    #[error("clipboard logical clock exhausted; reconnect required")]
+    ClockExhausted,
 }
 
 /// Platform clipboard access.

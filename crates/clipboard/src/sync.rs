@@ -30,9 +30,20 @@ use crate::content::ClipboardSnapshot;
 /// compression(1) + payload_len(4).
 const UPDATE_HEADER_LEN: usize = 16 + 8 + 8 + 1 + 4;
 
-/// Default cap on a single sealed payload (72 MiB), guarding the decode path
-/// from a hostile peer announcing a huge length.
-const DEFAULT_MAX_PAYLOAD: usize = 72 * 1024 * 1024;
+/// Frame budget shared with the stream transports.
+const TRANSPORT_FRAME_MAX: usize = 16 * 1024 * 1024;
+/// Fixed `Envelope` header encoded by `nexkvm-network::wire`.
+const WIRE_ENVELOPE_HEADER_LEN: usize = 2 + 2 + 8 + 2;
+/// Version and message-kind binding prepended before transport-layer sealing.
+const SECURE_BODY_HEADER_LEN: usize = 2 + 2 + 2;
+/// Authentication tag appended by the current ChaCha20-Poly1305 session layer.
+const SESSION_AEAD_TAG_LEN: usize = 16;
+/// Largest sealed clipboard payload that still fits one secure transport frame.
+const DEFAULT_MAX_PAYLOAD: usize = TRANSPORT_FRAME_MAX
+    - WIRE_ENVELOPE_HEADER_LEN
+    - SECURE_BODY_HEADER_LEN
+    - SESSION_AEAD_TAG_LEN
+    - UPDATE_HEADER_LEN;
 
 /// A clipboard synchronization message as it travels on the wire.
 ///
@@ -43,7 +54,7 @@ const DEFAULT_MAX_PAYLOAD: usize = 72 * 1024 * 1024;
 pub struct ClipboardUpdate {
     /// Producing device.
     pub origin: DeviceId,
-    /// Lamport-style ordering sequence.
+    /// Hybrid logical ordering sequence.
     pub seq: u64,
     /// Wall-clock millis at production.
     pub at_millis: u64,
@@ -142,7 +153,7 @@ impl ClipboardSync {
         self
     }
 
-    /// Override the maximum accepted/produced sealed payload size.
+    /// Override the maximum accepted/produced sealed and decoded payload size.
     #[must_use]
     pub fn with_max_payload(mut self, max_payload: usize) -> Self {
         self.max_payload = max_payload;
@@ -162,15 +173,21 @@ impl ClipboardSync {
         snapshot: &ClipboardSnapshot,
         now_millis: u64,
     ) -> Result<Option<ClipboardUpdate>, ClipboardError> {
-        let stamp = match self
-            .resolver
-            .on_local_change(snapshot.fingerprint(), now_millis)
-        {
-            LocalDecision::Suppress => return Ok(None),
-            LocalDecision::Broadcast(stamp) => stamp,
-        };
+        if snapshot.is_concealed() {
+            return Ok(None);
+        }
+        let fingerprint = snapshot.fingerprint();
+        if self.resolver.holds(fingerprint) {
+            return Ok(None);
+        }
 
         let encoded = snapshot.encode()?;
+        if encoded.len() > self.max_payload {
+            return Err(ClipboardError::TooLarge {
+                size: encoded.len(),
+                limit: self.max_payload,
+            });
+        }
         let algorithm = self.policy.choose(snapshot);
         let compressed = compression::compress(algorithm, &encoded)?;
         let payload = self.cipher.seal(&compressed)?;
@@ -181,6 +198,12 @@ impl ClipboardSync {
                 limit: self.max_payload,
             });
         }
+
+        let stamp = match self.resolver.on_local_change(fingerprint, now_millis) {
+            LocalDecision::Suppress => return Ok(None),
+            LocalDecision::Broadcast(stamp) => stamp,
+            LocalDecision::ClockExhausted => return Err(ClipboardError::ClockExhausted),
+        };
 
         Ok(Some(ClipboardUpdate {
             origin: stamp.origin,
@@ -209,7 +232,8 @@ impl ClipboardSync {
         }
 
         let compressed = self.cipher.open(&update.payload)?;
-        let encoded = compression::decompress(update.compression, &compressed)?;
+        let encoded =
+            compression::decompress_bounded(update.compression, &compressed, self.max_payload)?;
         let snapshot = ClipboardSnapshot::decode(Bytes::from(encoded))?;
 
         let stamp = OriginStamp {
@@ -262,6 +286,67 @@ mod tests {
     }
 
     #[test]
+    fn default_payload_cap_fits_secure_transport_frame() {
+        const FRAME_MAX: usize = 16 * 1024 * 1024;
+        const ENVELOPE_HEADER: usize = 2 + 2 + 8 + 2;
+        const SECURE_BODY_HEADER: usize = 2 + 2 + 2;
+        const SESSION_AEAD_TAG: usize = 16;
+        let configured_max = sync(DeviceId::generate()).max_payload;
+
+        assert!(
+            ENVELOPE_HEADER
+                + SECURE_BODY_HEADER
+                + SESSION_AEAD_TAG
+                + UPDATE_HEADER_LEN
+                + configured_max
+                <= FRAME_MAX
+        );
+    }
+
+    #[test]
+    fn oversized_outbound_does_not_advance_sequence() {
+        let mut a = sync(DeviceId::generate()).with_max_payload(64);
+        let oversized = ClipboardSnapshot::from_text("x".repeat(128));
+
+        assert!(matches!(
+            a.prepare_outbound(&oversized, 1),
+            Err(ClipboardError::TooLarge { limit: 64, .. })
+        ));
+
+        let update = a
+            .prepare_outbound(&ClipboardSnapshot::from_text("ok"), 1)
+            .unwrap()
+            .expect("small clipboard update");
+        assert_eq!(update.seq, 1, "rejected payload must not consume a stamp");
+    }
+
+    #[cfg(feature = "compression")]
+    #[test]
+    fn inbound_decompression_is_bounded_by_max_payload() {
+        let snapshot = ClipboardSnapshot::from_text("z".repeat(4096));
+        let encoded = snapshot.encode().unwrap();
+        let compressed = compression::compress(CompressionAlgorithm::Deflate, &encoded).unwrap();
+        assert!(compressed.len() < 256, "fixture must pass wire-size check");
+
+        let update = ClipboardUpdate {
+            origin: DeviceId::generate(),
+            seq: 1,
+            at_millis: 1,
+            compression: CompressionAlgorithm::Deflate,
+            payload: Bytes::from(compressed),
+        };
+        let mut receiver = sync(DeviceId::generate()).with_max_payload(256);
+
+        assert!(matches!(
+            receiver.accept_inbound(update),
+            Err(ClipboardError::TooLarge {
+                size: 257,
+                limit: 256
+            })
+        ));
+    }
+
+    #[test]
     fn full_pipeline_between_two_devices() {
         let dev_a = DeviceId::generate();
         let dev_b = DeviceId::generate();
@@ -305,6 +390,23 @@ mod tests {
         let snap = ClipboardSnapshot::from_text("same");
         assert!(a.prepare_outbound(&snap, 1).unwrap().is_some());
         assert!(a.prepare_outbound(&snap, 2).unwrap().is_none());
+    }
+
+    #[test]
+    fn concealed_clipboard_content_is_never_prepared_for_the_network() {
+        let mut sync = sync(DeviceId::generate());
+        let concealed = ClipboardSnapshot::new(vec![ClipboardContent {
+            mime: "org.nspasteboard.ConcealedType".into(),
+            data: Bytes::from_static(b"password"),
+        }]);
+
+        assert!(sync.prepare_outbound(&concealed, 1).unwrap().is_none());
+        let ordinary = ClipboardSnapshot::from_text("safe");
+        let update = sync
+            .prepare_outbound(&ordinary, 1)
+            .unwrap()
+            .expect("concealed content must not advance the outbound clock");
+        assert_eq!(update.seq, 1);
     }
 
     #[test]
