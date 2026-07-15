@@ -54,6 +54,8 @@ pub struct CapturedCgEvent {
     pub display_size: Option<(f64, f64)>,
     /// macOS virtual key code for keyboard events.
     pub keycode: Option<u16>,
+    /// CoreGraphics modifier flags for `FlagsChanged` events.
+    pub event_flags: Option<u64>,
     /// Scroll delta x in line units.
     pub scroll_dx: Option<f64>,
     /// Scroll delta y in line units.
@@ -80,6 +82,7 @@ impl Default for CapturedCgEvent {
             location: None,
             display_size: None,
             keycode: None,
+            event_flags: None,
             scroll_dx: None,
             scroll_dy: None,
             delta_dx: None,
@@ -133,7 +136,15 @@ fn plan_capture_event_with_mode(event: CapturedCgEvent, suppressed: bool) -> Opt
         }),
         CgCaptureEventType::KeyDown => cg_to_hid_keycode(event.keycode?).map(InputEvent::KeyPress),
         CgCaptureEventType::KeyUp => cg_to_hid_keycode(event.keycode?).map(InputEvent::KeyRelease),
-        CgCaptureEventType::FlagsChanged => None,
+        CgCaptureEventType::FlagsChanged => {
+            let keycode = event.keycode?;
+            let (hid, mask) = cg_modifier_to_hid_and_flag(keycode)?;
+            if event.event_flags? & mask != 0 {
+                Some(InputEvent::KeyPress(hid))
+            } else {
+                Some(InputEvent::KeyRelease(hid))
+            }
+        }
     }
 }
 
@@ -146,34 +157,117 @@ fn normalize_axis(value: f64, max: f64) -> f64 {
 
 fn cg_to_hid_keycode(keycode: u16) -> Option<u32> {
     match keycode {
-        0 => Some(0x04),  // A
-        11 => Some(0x05), // B
-        8 => Some(0x06),  // C
-        2 => Some(0x07),  // D
-        14 => Some(0x08), // E
-        3 => Some(0x09),  // F
-        5 => Some(0x0A),  // G
-        4 => Some(0x0B),  // H
-        34 => Some(0x0C), // I
-        38 => Some(0x0D), // J
-        40 => Some(0x0E), // K
-        37 => Some(0x0F), // L
-        46 => Some(0x10), // M
-        45 => Some(0x11), // N
-        31 => Some(0x12), // O
-        35 => Some(0x13), // P
-        12 => Some(0x14), // Q
-        15 => Some(0x15), // R
-        1 => Some(0x16),  // S
-        17 => Some(0x17), // T
-        32 => Some(0x18), // U
-        9 => Some(0x19),  // V
-        13 => Some(0x1A), // W
-        7 => Some(0x1B),  // X
-        16 => Some(0x1C), // Y
-        6 => Some(0x1D),  // Z
-        53 => Some(0x29), // Escape
-        49 => Some(0x2C), // Space
+        0 => Some(0x04),   // A
+        11 => Some(0x05),  // B
+        8 => Some(0x06),   // C
+        2 => Some(0x07),   // D
+        14 => Some(0x08),  // E
+        3 => Some(0x09),   // F
+        5 => Some(0x0A),   // G
+        4 => Some(0x0B),   // H
+        34 => Some(0x0C),  // I
+        38 => Some(0x0D),  // J
+        40 => Some(0x0E),  // K
+        37 => Some(0x0F),  // L
+        46 => Some(0x10),  // M
+        45 => Some(0x11),  // N
+        31 => Some(0x12),  // O
+        35 => Some(0x13),  // P
+        12 => Some(0x14),  // Q
+        15 => Some(0x15),  // R
+        1 => Some(0x16),   // S
+        17 => Some(0x17),  // T
+        32 => Some(0x18),  // U
+        9 => Some(0x19),   // V
+        13 => Some(0x1A),  // W
+        7 => Some(0x1B),   // X
+        16 => Some(0x1C),  // Y
+        6 => Some(0x1D),   // Z
+        18 => Some(0x1E),  // 1
+        19 => Some(0x1F),  // 2
+        20 => Some(0x20),  // 3
+        21 => Some(0x21),  // 4
+        23 => Some(0x22),  // 5
+        22 => Some(0x23),  // 6
+        26 => Some(0x24),  // 7
+        28 => Some(0x25),  // 8
+        25 => Some(0x26),  // 9
+        29 => Some(0x27),  // 0
+        36 => Some(0x28),  // Return
+        53 => Some(0x29),  // Escape
+        51 => Some(0x2A),  // Backspace
+        48 => Some(0x2B),  // Tab
+        49 => Some(0x2C),  // Space
+        27 => Some(0x2D),  // Minus
+        24 => Some(0x2E),  // Equal
+        33 => Some(0x2F),  // Left bracket
+        30 => Some(0x30),  // Right bracket
+        42 => Some(0x31),  // Backslash
+        41 => Some(0x33),  // Semicolon
+        39 => Some(0x34),  // Apostrophe
+        50 => Some(0x35),  // Grave
+        43 => Some(0x36),  // Comma
+        47 => Some(0x37),  // Period
+        44 => Some(0x38),  // Slash
+        122 => Some(0x3A), // F1
+        120 => Some(0x3B), // F2
+        99 => Some(0x3C),  // F3
+        118 => Some(0x3D), // F4
+        96 => Some(0x3E),  // F5
+        97 => Some(0x3F),  // F6
+        98 => Some(0x40),  // F7
+        100 => Some(0x41), // F8
+        101 => Some(0x42), // F9
+        109 => Some(0x43), // F10
+        103 => Some(0x44), // F11
+        111 => Some(0x45), // F12
+        115 => Some(0x4A), // Home
+        116 => Some(0x4B), // Page up
+        117 => Some(0x4C), // Forward delete
+        119 => Some(0x4D), // End
+        121 => Some(0x4E), // Page down
+        124 => Some(0x4F), // Right arrow
+        123 => Some(0x50), // Left arrow
+        125 => Some(0x51), // Down arrow
+        126 => Some(0x52), // Up arrow
+        75 => Some(0x54),  // Keypad divide
+        67 => Some(0x55),  // Keypad multiply
+        78 => Some(0x56),  // Keypad minus
+        69 => Some(0x57),  // Keypad plus
+        76 => Some(0x58),  // Keypad enter
+        83 => Some(0x59),  // Keypad 1
+        84 => Some(0x5A),  // Keypad 2
+        85 => Some(0x5B),  // Keypad 3
+        86 => Some(0x5C),  // Keypad 4
+        87 => Some(0x5D),  // Keypad 5
+        88 => Some(0x5E),  // Keypad 6
+        89 => Some(0x5F),  // Keypad 7
+        91 => Some(0x60),  // Keypad 8
+        92 => Some(0x61),  // Keypad 9
+        82 => Some(0x62),  // Keypad 0
+        65 => Some(0x63),  // Keypad decimal
+        81 => Some(0x67),  // Keypad equal
+        _ => None,
+    }
+}
+
+const CG_EVENT_FLAG_MASK_ALPHA_SHIFT: u64 = 0x0001_0000;
+const CG_EVENT_FLAG_MASK_SHIFT: u64 = 0x0002_0000;
+const CG_EVENT_FLAG_MASK_CONTROL: u64 = 0x0004_0000;
+const CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000;
+const CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
+
+fn cg_modifier_to_hid_and_flag(keycode: u16) -> Option<(u32, u64)> {
+    match keycode {
+        59 => Some((0xE0, CG_EVENT_FLAG_MASK_CONTROL)),
+        56 => Some((0xE1, CG_EVENT_FLAG_MASK_SHIFT)),
+        58 => Some((0xE2, CG_EVENT_FLAG_MASK_ALTERNATE)),
+        55 => Some((0xE3, CG_EVENT_FLAG_MASK_COMMAND)),
+        62 => Some((0xE4, CG_EVENT_FLAG_MASK_CONTROL)),
+        60 => Some((0xE5, CG_EVENT_FLAG_MASK_SHIFT)),
+        61 => Some((0xE6, CG_EVENT_FLAG_MASK_ALTERNATE)),
+        54 => Some((0xE7, CG_EVENT_FLAG_MASK_COMMAND)),
+        57 => Some((0x39, CG_EVENT_FLAG_MASK_ALPHA_SHIFT)),
         _ => None,
     }
 }
@@ -230,16 +324,30 @@ fn update_suppression(
 }
 
 fn set_native_cursor_hidden(hidden: bool) {
-    // SAFETY: Cursor visibility functions accept a display identifier returned
-    // by CoreGraphics and do not retain pointers or caller-owned memory.
+    let (associated, hidden) = native_cursor_plan(hidden);
+    // SAFETY: Cursor functions accept value parameters and a display identifier
+    // returned by CoreGraphics; they retain no caller-owned memory.
     unsafe {
         let display = CGMainDisplayID();
-        if hidden {
-            let _ = CGDisplayHideCursor(display);
+        let association_error = CGAssociateMouseAndMouseCursorPosition(u32::from(associated));
+        let visibility_error = if hidden {
+            CGDisplayHideCursor(display)
         } else {
-            let _ = CGDisplayShowCursor(display);
+            CGDisplayShowCursor(display)
+        };
+        if association_error != 0 || visibility_error != 0 {
+            tracing::warn!(
+                association_error,
+                visibility_error,
+                hidden,
+                "failed to update native cursor suppression"
+            );
         }
     }
+}
+
+fn native_cursor_plan(suppressed: bool) -> (bool, bool) {
+    (!suppressed, suppressed)
 }
 
 #[async_trait]
@@ -299,11 +407,13 @@ unsafe extern "C" {
     ) -> CFMachPortRef;
     fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    fn CGEventGetFlags(event: CGEventRef) -> u64;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayPixelsWide(display: u32) -> usize;
     fn CGDisplayPixelsHigh(display: u32) -> usize;
     fn CGDisplayHideCursor(display: u32) -> i32;
     fn CGDisplayShowCursor(display: u32) -> i32;
+    fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -410,6 +520,7 @@ fn captured_from_native(event_type: u32, event: CGEventRef) -> Option<CapturedCg
     let display = main_display_size();
     let keycode =
         unsafe { CGEventGetIntegerValueField(event, K_CG_EVENT_FIELD_KEYBOARD_EVENT_KEYCODE) };
+    let event_flags = unsafe { CGEventGetFlags(event) };
     let scroll_y =
         unsafe { CGEventGetIntegerValueField(event, K_CG_SCROLL_WHEEL_EVENT_DELTA_AXIS_1) };
     let scroll_x =
@@ -421,6 +532,7 @@ fn captured_from_native(event_type: u32, event: CGEventRef) -> Option<CapturedCg
         location: Some((location.x, location.y)),
         display_size: Some(display),
         keycode: Some(keycode as u16),
+        event_flags: Some(event_flags),
         scroll_dx: Some(scroll_x as f64),
         scroll_dy: Some(scroll_y as f64),
         delta_dx: Some(delta_x as f64 / display.0.max(1.0)),
@@ -459,6 +571,7 @@ fn capture_event_mask() -> u64 {
         CgCaptureEventType::RightMouseDragged,
         CgCaptureEventType::KeyDown,
         CgCaptureEventType::KeyUp,
+        CgCaptureEventType::FlagsChanged,
         CgCaptureEventType::ScrollWheel,
         CgCaptureEventType::OtherMouseDown,
         CgCaptureEventType::OtherMouseUp,
@@ -498,6 +611,12 @@ mod tests {
     }
 
     #[test]
+    fn suppression_disconnects_the_local_pointer_from_mouse_motion() {
+        assert_eq!(native_cursor_plan(true), (false, true));
+        assert_eq!(native_cursor_plan(false), (true, false));
+    }
+
+    #[test]
     fn captured_mouse_move_normalizes_to_input_event() {
         let event = CapturedCgEvent {
             event_type: CgCaptureEventType::MouseMoved,
@@ -528,6 +647,44 @@ mod tests {
                 ..CapturedCgEvent::default()
             }),
             Some(InputEvent::KeyRelease(0x04))
+        );
+    }
+
+    #[test]
+    fn captured_common_keys_and_modifiers_map_to_usb_hid() {
+        assert_eq!(
+            plan_capture_event(CapturedCgEvent {
+                event_type: CgCaptureEventType::KeyDown,
+                keycode: Some(18),
+                ..CapturedCgEvent::default()
+            }),
+            Some(InputEvent::KeyPress(0x1E))
+        );
+        assert_eq!(
+            plan_capture_event(CapturedCgEvent {
+                event_type: CgCaptureEventType::KeyDown,
+                keycode: Some(36),
+                ..CapturedCgEvent::default()
+            }),
+            Some(InputEvent::KeyPress(0x28))
+        );
+        assert_eq!(
+            plan_capture_event(CapturedCgEvent {
+                event_type: CgCaptureEventType::FlagsChanged,
+                keycode: Some(56),
+                event_flags: Some(CG_EVENT_FLAG_MASK_SHIFT),
+                ..CapturedCgEvent::default()
+            }),
+            Some(InputEvent::KeyPress(0xE1))
+        );
+        assert_eq!(
+            plan_capture_event(CapturedCgEvent {
+                event_type: CgCaptureEventType::FlagsChanged,
+                keycode: Some(56),
+                event_flags: Some(0),
+                ..CapturedCgEvent::default()
+            }),
+            Some(InputEvent::KeyRelease(0xE1))
         );
     }
 

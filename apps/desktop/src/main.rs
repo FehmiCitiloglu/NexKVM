@@ -567,10 +567,6 @@ fn create_clipboard_peer_handler(
 }
 
 fn handle_input_capture_end(error: input_session::InputSessionError) {
-    if matches!(error, input_session::InputSessionError::EmergencyStop) {
-        tracing::warn!("emergency stop requested; exiting nexkvm");
-        std::process::exit(0);
-    }
     tracing::warn!(%error, "input capture forwarding ended");
 }
 

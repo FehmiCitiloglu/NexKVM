@@ -11,8 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, thiserror::Error)]
 pub enum InputSessionError {
-    #[error("emergency stop requested")]
-    EmergencyStop,
     #[error("input payload codec error: {0}")]
     Codec(String),
     #[error("unexpected message kind: {0:?}")]
@@ -369,14 +367,6 @@ where
         } else {
             capture.next_event().await?
         };
-        if share.is_remote()
-            && matches!(event, InputEvent::KeyPress(keycode) if keycode == emergency_stop_keycode)
-        {
-            if share.release_remote() {
-                set_suppressed(false);
-            }
-            return Err(InputSessionError::EmergencyStop);
-        }
         let was_remote = share.is_remote();
         let routed = share.route(event);
         let is_remote = share.is_remote();
@@ -439,7 +429,15 @@ where
                 if envelope.kind != MessageKind::Input {
                     continue;
                 }
-                injector.inject(decode_input_event(envelope)?).await?;
+                match injector.inject(decode_input_event(envelope)?).await {
+                    Ok(()) => {}
+                    Err(InputError::PermissionDenied) => {
+                        return Err(InputError::PermissionDenied.into());
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "input event injection failed; continuing session");
+                    }
+                }
             }
             Err(NetworkError::Closed) => return Ok(()),
             Err(error) => return Err(error.into()),
@@ -777,11 +775,29 @@ mod tests {
         events: Mutex<Vec<InputEvent>>,
     }
 
+    #[derive(Debug, Default)]
+    struct FailingOnceInjector {
+        attempts: Mutex<Vec<InputEvent>>,
+    }
+
     #[async_trait]
     impl InputInjector for RecordingInjector {
         async fn inject(&self, event: InputEvent) -> Result<(), InputError> {
             self.events.lock().unwrap().push(event);
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl InputInjector for FailingOnceInjector {
+        async fn inject(&self, event: InputEvent) -> Result<(), InputError> {
+            let mut attempts = self.attempts.lock().unwrap();
+            attempts.push(event);
+            if attempts.len() == 1 {
+                Err(InputError::Backend("synthetic injection failure".into()))
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -927,7 +943,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emergency_key_stops_remote_forwarding_without_sending_key() {
+    async fn emergency_key_returns_local_without_ending_the_forwarder() {
         let capture = QueueCapture::new(vec![
             InputEvent::PointerMove { x: 1.0, y: 0.5 },
             InputEvent::KeyPress(41),
@@ -948,7 +964,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(error, InputSessionError::EmergencyStop));
+        assert!(matches!(error, InputSessionError::Codec(_)));
         let sent = connection.sent.lock().unwrap().clone();
         assert_eq!(sent.len(), 1);
         assert_eq!(
@@ -1061,6 +1077,22 @@ mod tests {
                 InputEvent::ButtonPress(nexkvm_input::MouseButton::Left),
                 InputEvent::ButtonRelease(nexkvm_input::MouseButton::Left),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn injection_failure_does_not_end_the_receiver_session() {
+        let injector = FailingOnceInjector::default();
+        let connection = MemoryConnection::with_recv(vec![
+            encode_input_event(MessageId(1), InputEvent::KeyPress(0x04)),
+            encode_input_event(MessageId(2), InputEvent::KeyRelease(0x04)),
+        ]);
+
+        inject_until_closed(&connection, &injector).await.unwrap();
+
+        assert_eq!(
+            injector.attempts.lock().unwrap().as_slice(),
+            &[InputEvent::KeyPress(0x04), InputEvent::KeyRelease(0x04)]
         );
     }
 

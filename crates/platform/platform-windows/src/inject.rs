@@ -49,6 +49,8 @@ pub mod mouse_flag {
 
 /// `KEYEVENTF_*` flags.
 pub mod key_flag {
+    /// `KEYEVENTF_EXTENDEDKEY`.
+    pub const EXTENDED: u32 = 0x0001;
     /// `KEYEVENTF_KEYUP`.
     pub const KEYUP: u32 = 0x0002;
     /// `KEYEVENTF_SCANCODE`.
@@ -271,6 +273,11 @@ fn input_from_plan(plan: SendInputPlan) -> Result<INPUT, InputError> {
                     "unsupported Windows HID keycode: {keycode}"
                 )));
             };
+            let flags = if hid_uses_extended_scancode(keycode) {
+                flags | key_flag::EXTENDED
+            } else {
+                flags
+            };
             Ok(keyboard_input(scan, flags))
         }
     }
@@ -335,10 +342,84 @@ fn hid_to_scancode(keycode: u32) -> Option<u16> {
         0x1B => Some(0x2d), // X
         0x1C => Some(0x15), // Y
         0x1D => Some(0x2c), // Z
+        0x1E => Some(0x02), // 1
+        0x1F => Some(0x03), // 2
+        0x20 => Some(0x04), // 3
+        0x21 => Some(0x05), // 4
+        0x22 => Some(0x06), // 5
+        0x23 => Some(0x07), // 6
+        0x24 => Some(0x08), // 7
+        0x25 => Some(0x09), // 8
+        0x26 => Some(0x0A), // 9
+        0x27 => Some(0x0B), // 0
+        0x28 => Some(0x1C), // Return
         0x29 => Some(0x01), // Escape
+        0x2A => Some(0x0E), // Backspace
+        0x2B => Some(0x0F), // Tab
         0x2C => Some(0x39), // Space
+        0x2D => Some(0x0C), // Minus
+        0x2E => Some(0x0D), // Equal
+        0x2F => Some(0x1A), // Left bracket
+        0x30 => Some(0x1B), // Right bracket
+        0x31 => Some(0x2B), // Backslash
+        0x33 => Some(0x27), // Semicolon
+        0x34 => Some(0x28), // Apostrophe
+        0x35 => Some(0x29), // Grave
+        0x36 => Some(0x33), // Comma
+        0x37 => Some(0x34), // Period
+        0x38 => Some(0x35), // Slash
+        0x39 => Some(0x3A), // Caps lock
+        0x3A => Some(0x3B), // F1
+        0x3B => Some(0x3C), // F2
+        0x3C => Some(0x3D), // F3
+        0x3D => Some(0x3E), // F4
+        0x3E => Some(0x3F), // F5
+        0x3F => Some(0x40), // F6
+        0x40 => Some(0x41), // F7
+        0x41 => Some(0x42), // F8
+        0x42 => Some(0x43), // F9
+        0x43 => Some(0x44), // F10
+        0x44 => Some(0x57), // F11
+        0x45 => Some(0x58), // F12
+        0x4A => Some(0x47), // Home
+        0x4B => Some(0x49), // Page up
+        0x4C => Some(0x53), // Delete
+        0x4D => Some(0x4F), // End
+        0x4E => Some(0x51), // Page down
+        0x4F => Some(0x4D), // Right arrow
+        0x50 => Some(0x4B), // Left arrow
+        0x51 => Some(0x50), // Down arrow
+        0x52 => Some(0x48), // Up arrow
+        0x54 => Some(0x35), // Keypad divide
+        0x55 => Some(0x37), // Keypad multiply
+        0x56 => Some(0x4A), // Keypad minus
+        0x57 => Some(0x4E), // Keypad plus
+        0x58 => Some(0x1C), // Keypad enter
+        0x59 => Some(0x4F), // Keypad 1
+        0x5A => Some(0x50), // Keypad 2
+        0x5B => Some(0x51), // Keypad 3
+        0x5C => Some(0x4B), // Keypad 4
+        0x5D => Some(0x4C), // Keypad 5
+        0x5E => Some(0x4D), // Keypad 6
+        0x5F => Some(0x47), // Keypad 7
+        0x60 => Some(0x48), // Keypad 8
+        0x61 => Some(0x49), // Keypad 9
+        0x62 => Some(0x52), // Keypad 0
+        0x63 => Some(0x53), // Keypad decimal
+        0xE0 => Some(0x1D), // Left control
+        0xE1 => Some(0x2A), // Left shift
+        0xE2 => Some(0x38), // Left alt
+        0xE3 => Some(0x5B), // Left GUI
+        0xE4 => Some(0x1D), // Right control
+        0xE5 => Some(0x36), // Right shift
+        0xE6 => Some(0x38), // Right alt
+        0xE7 => Some(0x5C), // Right GUI
         _ => None,
     }
+}
+
+fn hid_uses_extended_scancode(keycode: u32) -> bool {
+    matches!(keycode, 0x4A..=0x54 | 0x58 | 0xE3 | 0xE4 | 0xE6 | 0xE7)
 }
 
 #[cfg(test)]
@@ -402,6 +483,30 @@ mod tests {
                 flags: key_flag::SCANCODE | key_flag::KEYUP,
             }
         );
+    }
+
+    #[test]
+    fn common_hid_keys_map_to_windows_scancodes() {
+        assert_eq!(hid_to_scancode(0x1E), Some(0x02)); // 1
+        assert_eq!(hid_to_scancode(0x28), Some(0x1C)); // Return
+        assert_eq!(hid_to_scancode(0x2A), Some(0x0E)); // Backspace
+        assert_eq!(hid_to_scancode(0xE1), Some(0x2A)); // Left shift
+    }
+
+    #[test]
+    fn right_control_and_navigation_keys_use_extended_scancodes() {
+        for (keycode, expected_scan) in [(0xE4, 0x1D), (0x4F, 0x4D)] {
+            let input = input_from_plan(SendInputPlan::Key {
+                keycode,
+                flags: key_flag::SCANCODE,
+            })
+            .unwrap();
+
+            // SAFETY: `input_from_plan` initialized the keyboard union member.
+            let keyboard = unsafe { input.Anonymous.ki };
+            assert_eq!(keyboard.wScan, expected_scan);
+            assert_eq!(keyboard.dwFlags, key_flag::SCANCODE | key_flag::EXTENDED);
+        }
     }
 
     #[tokio::test]
