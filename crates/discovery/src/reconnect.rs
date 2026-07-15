@@ -214,18 +214,24 @@ mod tests {
     }
 
     #[test]
-    fn success_resets_backoff() {
+    fn success_suppresses_reconnect_until_peer_disappears() {
         let mut planner = ReconnectPlanner::new(ReconnectPolicy::default());
         let dev = device("d", Some("fp"));
         let visible = vec![dev.clone()];
         let t0 = Instant::now();
 
         planner.due(&visible, |_| true, t0);
-        planner.record_failure(dev.info.id, t0);
         planner.record_success(dev.info.id);
 
-        // Back to a clean slate: immediately eligible, attempt 0.
-        let targets = planner.due(&visible, |_| true, t0);
+        assert!(
+            planner
+                .due(&visible, |_| true, t0 + Duration::from_secs(60))
+                .is_empty(),
+            "a connected peer must not be dialed again"
+        );
+
+        assert!(planner.due(&[], |_| true, t0).is_empty());
+        let targets = planner.due(&visible, |_| true, t0 + Duration::from_secs(61));
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].attempt, 0);
     }

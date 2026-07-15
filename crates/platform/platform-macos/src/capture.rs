@@ -202,7 +202,7 @@ impl MacosInputCapture {
     }
 
     pub fn set_suppressed(&self, suppressed: bool) {
-        self.suppressed.store(suppressed, Ordering::SeqCst);
+        update_suppression(&self.suppressed, suppressed, set_native_cursor_hidden);
     }
 
     #[cfg(test)]
@@ -215,6 +215,29 @@ impl MacosInputCapture {
             accessibility_trusted,
             receiver: Some(Arc::new(Mutex::new(receiver))),
             suppressed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+fn update_suppression(
+    state: &AtomicBool,
+    suppressed: bool,
+    mut set_cursor_hidden: impl FnMut(bool),
+) {
+    if state.swap(suppressed, Ordering::SeqCst) != suppressed {
+        set_cursor_hidden(suppressed);
+    }
+}
+
+fn set_native_cursor_hidden(hidden: bool) {
+    // SAFETY: Cursor visibility functions accept a display identifier returned
+    // by CoreGraphics and do not retain pointers or caller-owned memory.
+    unsafe {
+        let display = CGMainDisplayID();
+        if hidden {
+            let _ = CGDisplayHideCursor(display);
+        } else {
+            let _ = CGDisplayShowCursor(display);
         }
     }
 }
@@ -279,6 +302,8 @@ unsafe extern "C" {
     fn CGMainDisplayID() -> u32;
     fn CGDisplayPixelsWide(display: u32) -> usize;
     fn CGDisplayPixelsHigh(display: u32) -> usize;
+    fn CGDisplayHideCursor(display: u32) -> i32;
+    fn CGDisplayShowCursor(display: u32) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -458,6 +483,19 @@ fn main_display_size() -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suppression_visibility_changes_only_on_state_transitions() {
+        let state = AtomicBool::new(false);
+        let mut visibility = Vec::new();
+
+        update_suppression(&state, true, |hidden| visibility.push(hidden));
+        update_suppression(&state, true, |hidden| visibility.push(hidden));
+        update_suppression(&state, false, |hidden| visibility.push(hidden));
+        update_suppression(&state, false, |hidden| visibility.push(hidden));
+
+        assert_eq!(visibility, vec![true, false]);
+    }
 
     #[test]
     fn captured_mouse_move_normalizes_to_input_event() {
