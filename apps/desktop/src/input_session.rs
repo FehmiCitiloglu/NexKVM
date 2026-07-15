@@ -6,6 +6,8 @@ use nexkvm_input::{
 };
 use nexkvm_network::{Connection, NetworkError};
 use nexkvm_protocol::{Envelope, MessageId, MessageKind, PROTOCOL_VERSION};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, thiserror::Error)]
 pub enum InputSessionError {
@@ -15,6 +17,35 @@ pub enum InputSessionError {
     Codec(String),
     #[error("unexpected message kind: {0:?}")]
     UnexpectedKind(MessageKind),
+}
+
+/// Prevents duplicate peer connections from racing to consume the single
+/// platform input stream. The lease is released when its forwarding task ends.
+#[derive(Debug, Default)]
+pub(crate) struct InputForwarderGate {
+    active: AtomicBool,
+}
+
+impl InputForwarderGate {
+    pub(crate) fn try_acquire(self: &Arc<Self>) -> Option<InputForwarderLease> {
+        self.active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| InputForwarderLease {
+                gate: Arc::clone(self),
+            })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InputForwarderLease {
+    gate: Arc<InputForwarderGate>,
+}
+
+impl Drop for InputForwarderLease {
+    fn drop(&mut self) {
+        self.gate.active.store(false, Ordering::Release);
+    }
 }
 
 #[allow(dead_code)]
@@ -463,6 +494,23 @@ mod tests {
     use std::collections::VecDeque;
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn input_forwarder_gate_allows_only_one_live_connection() {
+        let gate = Arc::new(InputForwarderGate::default());
+
+        let first = gate.try_acquire().expect("first connection owns capture");
+        assert!(
+            gate.try_acquire().is_none(),
+            "duplicate connection is rejected"
+        );
+
+        drop(first);
+        assert!(
+            gate.try_acquire().is_some(),
+            "capture is released after session end"
+        );
+    }
 
     #[test]
     fn input_event_round_trips_through_envelope_body() {

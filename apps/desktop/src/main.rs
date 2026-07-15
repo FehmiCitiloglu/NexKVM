@@ -299,6 +299,7 @@ fn input_peer_handler(
         } else {
             None
         };
+        let input_forwarder_gate = Arc::new(input_session::InputForwarderGate::default());
         let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
             let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
             if let Some(injector) = injector.clone() {
@@ -313,7 +314,12 @@ fn input_peer_handler(
             }
             if let Some(capture) = capture.clone() {
                 let connection = Arc::clone(&connection);
+                let input_forwarder_gate = Arc::clone(&input_forwarder_gate);
                 tokio::spawn(async move {
+                    let Some(_lease) = input_forwarder_gate.try_acquire() else {
+                        tracing::debug!("input capture already belongs to another peer connection");
+                        return;
+                    };
                     let capture_for_suppression = capture.clone();
                     if let Err(error) = input_session::forward_extended_until_error(
                         &capture,
@@ -346,6 +352,7 @@ fn input_peer_handler(
         } else {
             None
         };
+        let input_forwarder_gate = Arc::new(input_session::InputForwarderGate::default());
         let handler: connection::PeerConnectionHandler = Arc::new(move |connection| {
             let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
             if let Some(injector) = injector.clone() {
@@ -360,7 +367,12 @@ fn input_peer_handler(
             }
             if let Some(capture) = capture.clone() {
                 let connection = Arc::clone(&connection);
+                let input_forwarder_gate = Arc::clone(&input_forwarder_gate);
                 tokio::spawn(async move {
+                    let Some(_lease) = input_forwarder_gate.try_acquire() else {
+                        tracing::debug!("input capture already belongs to another peer connection");
+                        return;
+                    };
                     let capture_for_suppression = capture.clone();
                     if let Err(error) = input_session::forward_extended_until_error(
                         &capture,
