@@ -13,6 +13,7 @@
 //! testable and decoupled from the transport crate.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use nexkvm_core::identity::DeviceId;
@@ -62,9 +63,12 @@ pub struct ReconnectTarget {
 }
 
 #[derive(Debug)]
-struct DeviceState {
-    attempts: u32,
-    next_eligible: Instant,
+enum DeviceState {
+    Connected,
+    Backoff {
+        attempts: u32,
+        next_eligible: Instant,
+    },
 }
 
 /// Decides which trusted, visible devices to (re)connect to, with backoff.
@@ -100,12 +104,23 @@ impl ReconnectPlanner {
     where
         F: Fn(&DiscoveredDevice) -> bool,
     {
+        let visible_ids = visible
+            .iter()
+            .map(|device| device.info.id)
+            .collect::<HashSet<_>>();
+        self.state.retain(|id, state| {
+            !matches!(state, DeviceState::Connected) || visible_ids.contains(id)
+        });
+
         let mut targets = Vec::new();
         for device in visible.iter().filter(|d| is_trusted(d)) {
             let id = device.info.id;
             let attempts = match self.state.get(&id) {
-                Some(s) if now < s.next_eligible => continue, // still cooling down
-                Some(s) => s.attempts,
+                Some(DeviceState::Connected) => continue,
+                Some(DeviceState::Backoff { next_eligible, .. }) if now < *next_eligible => {
+                    continue;
+                }
+                Some(DeviceState::Backoff { attempts, .. }) => *attempts,
                 None => 0,
             };
             targets.push(ReconnectTarget {
@@ -115,7 +130,7 @@ impl ReconnectPlanner {
             // Arm a cooldown so we don't re-emit while the attempt is in flight.
             self.state.insert(
                 id,
-                DeviceState {
+                DeviceState::Backoff {
                     attempts,
                     next_eligible: now + self.policy.delay_for(attempts),
                 },
@@ -124,19 +139,25 @@ impl ReconnectPlanner {
         targets
     }
 
-    /// Clear backoff for a device after a successful connection.
+    /// Mark a device connected so discovery does not dial it again while it
+    /// remains visible. Its state is cleared after it disappears.
     pub fn record_success(&mut self, id: DeviceId) {
-        self.state.remove(&id);
+        self.state.insert(id, DeviceState::Connected);
     }
 
     /// Record a failed attempt, growing the device's backoff window.
     pub fn record_failure(&mut self, id: DeviceId, now: Instant) {
-        let entry = self.state.entry(id).or_insert(DeviceState {
-            attempts: 0,
-            next_eligible: now,
-        });
-        entry.attempts = entry.attempts.saturating_add(1);
-        entry.next_eligible = now + self.policy.delay_for(entry.attempts);
+        let attempts = match self.state.get(&id) {
+            Some(DeviceState::Backoff { attempts, .. }) => attempts.saturating_add(1),
+            Some(DeviceState::Connected) | None => 1,
+        };
+        self.state.insert(
+            id,
+            DeviceState::Backoff {
+                attempts,
+                next_eligible: now + self.policy.delay_for(attempts),
+            },
+        );
     }
 
     /// Forget all per-device backoff state.
