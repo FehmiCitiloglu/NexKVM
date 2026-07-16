@@ -52,10 +52,35 @@ ad-hoc app can require approval again.
 
 ## 3. Pair in both directions
 
-Pairing is mutual: each Mac must pin the other Mac's public key. On Mac A, open
-**Pairing & Output**, enter Mac A's reachable LAN address such as
-`192.168.1.20:47654`, and generate a pairing URI. Transfer that URI to Mac B over
-a channel you trust. Repeat on Mac B with its own reachable address.
+The automatic CLI flow performs mutual pairing and writes the Connect address
+and Active peer fingerprint on both devices. Start the target daemon in a
+terminal so its confirmation prompt is interactive:
+
+```sh
+# Mac B
+/Applications/nexkvm.app/Contents/MacOS/nexkvm
+```
+
+Then run this on Mac A:
+
+```sh
+NEXKVM=/Applications/nexkvm.app/Contents/MacOS/nexkvm
+"$NEXKVM" pair-auto --peer 192.168.1.20:47654
+```
+
+Both terminals display the same six-digit code. Type `yes` on each device only
+after comparing those codes. Trust and settings are committed only after both
+users approve and both devices report successful persistence; ordinary
+persistence or connection failures roll back the local update. Restart any
+already-running daemon afterward so the new runtime connection settings load.
+
+The GUI-launched daemon does not currently provide an interactive confirmation
+surface for `pair-auto`; use a terminal daemon for this ceremony.
+
+The pairing-URI flow remains available as a manual fallback. Pairing is mutual:
+each Mac must pin the other Mac's public key. On Mac A, generate a pairing URI
+using its reachable LAN address, transfer it to Mac B over a channel you trust,
+and repeat in the other direction.
 
 Before accepting a URI, decode it and compare the displayed fingerprint over a
 separate trusted channel:

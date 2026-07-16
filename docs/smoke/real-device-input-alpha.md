@@ -37,6 +37,19 @@ Expected result: `target/release/nexkvm` exists on macOS and
 
 ## Pairing
 
+Recommended automatic flow: start the Windows daemon in an interactive
+PowerShell terminal, then run on the Mac:
+
+```sh
+target/release/nexkvm pair-auto --peer TARGET_IP:47654
+```
+
+Compare the six-digit code and type `yes` on both devices. This writes mutual
+trust, Connect address, and Active peer fingerprint on both sides. Restart both
+daemons before the input smoke.
+
+Manual URI fallback:
+
 On Windows:
 
 ```powershell

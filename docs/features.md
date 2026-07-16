@@ -48,6 +48,10 @@ planned.
 - [x] `nexkvm pair <uri>` pairing bootstrap decode and fingerprint display.
 - [x] `nexkvm pair --accept <uri>` trust-store write path after user-confirmed
   pairing bootstrap.
+- [x] `nexkvm pair-auto --peer <host:port>` mutual LAN pairing with matching
+  confirmation codes, two-sided approval, persistence-status exchange,
+  rollback on ordinary failure, and automatic Connect address/Active peer
+  configuration.
 - [x] `nexkvm pairing-uri <addr>` command for generating a testable pairing
   bootstrap URI.
 - [x] `nexkvm permissions` command for prompting/reporting required macOS
@@ -141,7 +145,9 @@ planned.
 - [x] Relay admission and route policy model.
 - [x] Browser remote-session ticket planning.
 - [x] User-confirmed pairing request/response exchange over a transport
-  connection, returning a confirmation prompt without trust-store writes.
+  connection, including peer listen-port exchange, mutual approval, and
+  persistence-status coordination; storage remains owned by the desktop
+  runtime.
 - [x] Authenticated reconnect path for trusted devices using transport identity
   exchange and trust-store public-key matching.
 - [x] Latency benchmark suite.

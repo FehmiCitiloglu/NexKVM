@@ -85,7 +85,8 @@ pub use latency::RttTracker;
 pub use mesh::{MeshEdge, MeshLinkClass, MeshNode, MeshRoute, MeshRouter, MeshTrustLevel};
 pub use packet::{PacketBatch, ZeroCopyPacket};
 pub use pairing::{
-    PairingConfirmationPrompt, initiate_pairing_handshake, respond_pairing_handshake,
+    PairingConfirmationPrompt, exchange_pairing_approval, exchange_pairing_persistence,
+    initiate_pairing_handshake, respond_pairing_handshake,
 };
 pub use quality::{
     NetworkQualityEstimator, NetworkQualityGrade, NetworkQualityRecommendation,

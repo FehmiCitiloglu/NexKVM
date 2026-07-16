@@ -19,6 +19,7 @@ use tracing::info;
 
 const EFFECTIVE_TRANSPORT: &str = "tcp";
 
+mod automatic_pairing;
 mod cli;
 mod clipboard_history;
 mod clipboard_runtime;
@@ -53,6 +54,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Devices => return list_devices(),
         Command::Pair { uri, accept } => return pair(&uri, accept),
+        Command::PairAuto { peer } => {
+            return automatic_pairing::initiate(&peer, config_path(), trust_path()).await;
+        }
         Command::PairingUri { addr } => return pairing_uri(&addr),
         Command::ClipboardHistory { json } => return clipboard_history_list(json),
         Command::ClipboardRestore { fingerprint } => {
@@ -216,9 +220,15 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         device.id,
         active_peer_selection,
     );
-    let trusted_peer_keys = trusted_public_keys();
     let local_fingerprint = local_public_key.fingerprint();
-    let session_config = connection::TrustedSessionConfig::new(local_identity, trusted_peer_keys);
+    let trust_path = trust_path();
+    let session_config =
+        connection::TrustedSessionConfig::from_trust_path(local_identity, trust_path.clone());
+    let pairing_handler = automatic_pairing::spawn_responder(
+        config_path.clone(),
+        trust_path,
+        local_public_key.clone(),
+    );
 
     // Create handlers once at the top level so they can be used in all spawn sites
     let peer_handlers = merge_peer_handlers(
@@ -240,6 +250,7 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
                 Arc::clone(&transport),
                 peer_handlers.clone(),
                 Some(session_config.clone()),
+                Some(pairing_handler),
             );
             info!(addr = %local_addr, "TCP transport listening");
             Some(transport)
@@ -2414,22 +2425,6 @@ fn identity_path_for(config_path: &std::path::Path) -> std::path::PathBuf {
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("identity.json")
-}
-
-fn trusted_public_keys() -> Vec<nexkvm_crypto::PublicKey> {
-    use nexkvm_storage::FileTrustStore;
-
-    match FileTrustStore::load(trust_path()) {
-        Ok(store) => store
-            .entries()
-            .into_iter()
-            .map(|entry| entry.public_key)
-            .collect(),
-        Err(error) => {
-            tracing::warn!(%error, "trust store unavailable; trusted sessions disabled");
-            Vec::new()
-        }
-    }
 }
 
 /// Construct the platform backend for the current OS, if one exists.

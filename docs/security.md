@@ -54,8 +54,30 @@ select a different key.
 
 ## First pairing ceremony
 
-The operational pairing flow is a trust bootstrap, not a network-authenticated
-key exchange:
+The recommended LAN ceremony is:
+
+1. Start the target daemon in an interactive terminal.
+2. Run `nexkvm pair-auto --peer <host:port>` on the initiating device.
+3. The peers exchange their public identities and a fresh nonce over the
+   unauthenticated pairing lane, then independently derive the same six-digit
+   short authentication string over both keys and the nonce.
+4. Users compare the displayed codes and explicitly type `yes` on both devices.
+   Approval from both endpoints is exchanged before either persists trust.
+5. Each endpoint pins the peer key, writes the observed peer address to
+   `network.connect_addr`, writes the peer fingerprint to `input.active_peer`,
+   and exchanges persistence status. If the peer reports failure or the status
+   exchange is lost, the successful side rolls back its local transaction.
+6. The peer's private-key possession is proved by the signed trusted-session
+   handshake when the daemons connect.
+
+The short-code comparison is the first-pairing MITM defense. Device name,
+address, LAN discovery, or merely receiving a pairing request is never
+confirmation. A user who approves without comparing the code can still pin an
+attacker's substituted key. The daemon accepts only one interactive pairing
+workflow at a time, and the GUI-launched daemon does not yet expose the
+confirmation prompt in its UI.
+
+The older pairing-URI flow remains a manual trust bootstrap:
 
 1. `nexkvm pairing-uri <ip:port>` encodes the device name, full Ed25519 public
    key, a freshly generated 32-byte random nonce, and the advertised address in
@@ -67,12 +89,9 @@ key exchange:
 4. Acceptance atomically persists the full public key in the local trust store.
    The peer's private-key possession is proved later, at connection time.
 
-This out-of-band comparison is the first-pairing MITM defense. Transferring and
-approving a substituted URI over the same compromised channel can pin an
-attacker's key. Device name, address, or LAN discovery alone must never be used
-as confirmation. The displayed fingerprint is an abbreviated representation of
-the full pinned key, so the ceremony is not equivalent to comparing every key
-byte.
+Transferring and approving a substituted URI over the same compromised channel
+can pin an attacker's key. The displayed fingerprint is abbreviated, so the URI
+ceremony is not equivalent to comparing every key byte.
 
 ### Pairing nonce limitation
 

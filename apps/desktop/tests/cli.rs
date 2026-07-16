@@ -41,6 +41,7 @@ fn help_lists_the_subcommands() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("nexkvm devices"));
     assert!(stdout.contains("nexkvm pair [--accept] <uri>"));
+    assert!(stdout.contains("nexkvm pair-auto --peer <host:port>"));
     assert!(stdout.contains("nexkvm permissions"));
     assert!(stdout.contains("nexkvm pipewire-smoke"));
     assert!(stdout.contains("--debug"));

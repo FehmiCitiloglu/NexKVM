@@ -48,6 +48,11 @@ pub enum Command {
         /// Address peers should dial (`ip:port`).
         addr: String,
     },
+    /// Pair mutually over the daemon's TCP port and persist peer settings.
+    PairAuto {
+        /// Reachable daemon endpoint (`host:port`).
+        peer: String,
+    },
     /// List encrypted local history containing local and received selections.
     ClipboardHistory {
         /// Emit machine-readable JSON for the GUI.
@@ -142,6 +147,7 @@ where
         Some("config-path") => Command::ConfigPath,
         Some("devices") => Command::Devices,
         Some("pair") => parse_pair_args(it)?,
+        Some("pair-auto") => parse_pair_auto_args(it)?,
         Some("pairing-uri") => {
             let addr = it.next().ok_or_else(|| {
                 "pairing-uri requires an address like 192.168.1.20:47654".to_string()
@@ -225,6 +231,24 @@ where
     }
     let uri = uri.ok_or_else(|| "pair requires a nexkvm:// pairing uri".to_string())?;
     Ok(Command::Pair { uri, accept })
+}
+
+fn parse_pair_auto_args<I>(args: I) -> Result<Command, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut it = args.into_iter();
+    if it.next().as_deref() != Some("--peer") {
+        return Err("pair-auto requires --peer <host:port>".to_string());
+    }
+    let peer = it
+        .next()
+        .filter(|peer| !peer.trim().is_empty())
+        .ok_or_else(|| "pair-auto requires --peer <host:port>".to_string())?;
+    if it.next().is_some() {
+        return Err("pair-auto accepts exactly one --peer <host:port>".to_string());
+    }
+    Ok(Command::PairAuto { peer })
 }
 
 fn parse_simulate_args<I>(args: I) -> Result<Command, String>
@@ -317,6 +341,9 @@ pub fn help_text() -> String {
     out.push_str("  nexkvm [--debug]            Run the desktop daemon\n");
     out.push_str("  nexkvm devices             List trusted (paired) devices\n");
     out.push_str("  nexkvm pair [--accept] <uri> Decode or accept a pairing bootstrap\n");
+    out.push_str(
+        "  nexkvm pair-auto --peer <host:port> Mutually pair and configure both devices\n",
+    );
     out.push_str("  nexkvm pairing-uri <addr>  Print this device's pairing bootstrap URI\n");
     out.push_str("  nexkvm clipboard-history [--json] List encrypted clipboard history\n");
     out.push_str("  nexkvm clipboard-restore <hex> Restore a clipboard history entry\n");
@@ -590,6 +617,22 @@ mod tests {
                 addr: "192.168.1.40:47654".into()
             }
         );
+    }
+
+    #[test]
+    fn pair_auto_requires_exactly_one_peer_endpoint() {
+        assert!(parse(["pair-auto"]).is_err());
+        assert!(parse(["pair-auto", "--peer"]).is_err());
+        assert!(parse(["pair-auto", "--peer", "a", "b"]).is_err());
+        assert_eq!(
+            parse(["pair-auto", "--peer", "192.168.1.40:47654"])
+                .unwrap()
+                .command,
+            Command::PairAuto {
+                peer: "192.168.1.40:47654".into(),
+            }
+        );
+        assert!(help_text().contains("nexkvm pair-auto --peer <host:port>"));
     }
 
     #[test]

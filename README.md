@@ -78,6 +78,7 @@ Useful commands:
 cargo run -p nexkvm -- doctor
 cargo run -p nexkvm -- permissions
 cargo run -p nexkvm -- devices
+cargo run -p nexkvm -- pair-auto --peer 192.168.1.27:47654
 cargo run -p nexkvm -- protocol
 cargo run -p nexkvm -- simulate tools/sim/local-workspace.toml
 ```

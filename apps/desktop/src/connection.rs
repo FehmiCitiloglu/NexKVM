@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,9 +18,11 @@ const EXPLICIT_RECONNECT_DELAY: Duration = Duration::from_secs(2);
 const INITIAL_ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(10);
 const MAX_ACCEPT_ERROR_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_PENDING_INBOUND_HANDSHAKES: usize = 32;
+const INBOUND_CLASSIFICATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub type PeerConnectionHandler =
     Arc<dyn Fn(Box<dyn Connection>, PeerConnectionContext) + Send + Sync>;
+pub type PairingConnectionHandler = Arc<dyn Fn(Box<dyn Connection>) + Send + Sync>;
 
 /// Whether this daemon accepted or initiated the physical peer connection.
 ///
@@ -76,17 +79,77 @@ impl PeerConnectionContext {
 }
 
 /// Trusted-session material used to secure raw transport connections.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TrustedSessionConfig {
     local_identity: DeviceKeypair,
-    trusted_peer_keys: Arc<Vec<PublicKey>>,
+    trusted_peer_source: TrustedPeerSource,
+}
+
+#[derive(Clone)]
+enum TrustedPeerSource {
+    #[cfg(test)]
+    Static(Arc<Vec<PublicKey>>),
+    File(PathBuf),
+}
+
+impl std::fmt::Debug for TrustedSessionConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = match &self.trusted_peer_source {
+            #[cfg(test)]
+            TrustedPeerSource::Static(_) => "static",
+            TrustedPeerSource::File(_) => "file",
+        };
+        formatter
+            .debug_struct("TrustedSessionConfig")
+            .field("local_identity", &self.local_identity)
+            .field("trusted_peer_source", &source)
+            .finish()
+    }
 }
 
 impl TrustedSessionConfig {
+    #[cfg(test)]
     pub fn new(local_identity: DeviceKeypair, trusted_peer_keys: Vec<PublicKey>) -> Self {
         Self {
             local_identity,
-            trusted_peer_keys: Arc::new(trusted_peer_keys),
+            trusted_peer_source: TrustedPeerSource::Static(Arc::new(trusted_peer_keys)),
+        }
+    }
+
+    pub fn from_trust_path(local_identity: DeviceKeypair, trust_path: PathBuf) -> Self {
+        Self {
+            local_identity,
+            trusted_peer_source: TrustedPeerSource::File(trust_path),
+        }
+    }
+
+    async fn trusted_peer_keys(&self) -> Result<Vec<PublicKey>, NetworkError> {
+        match &self.trusted_peer_source {
+            #[cfg(test)]
+            TrustedPeerSource::Static(keys) => Ok(keys.as_ref().clone()),
+            TrustedPeerSource::File(path) => {
+                let path = path.clone();
+                tokio::task::spawn_blocking(move || {
+                    nexkvm_storage::FileTrustStore::load(&path)
+                        .map(|store| {
+                            store
+                                .entries()
+                                .into_iter()
+                                .map(|entry| entry.public_key)
+                                .collect()
+                        })
+                        .map_err(|error| {
+                            NetworkError::Pairing(format!(
+                                "loading trusted peers from {}: {error}",
+                                path.display()
+                            ))
+                        })
+                })
+                .await
+                .map_err(|error| {
+                    NetworkError::Pairing(format!("trusted-peer loader task failed: {error}"))
+                })?
+            }
         }
     }
 }
@@ -152,14 +215,21 @@ pub fn spawn_inbound_accept_loop(
     transport: Arc<dyn Transport>,
     handler: Option<PeerConnectionHandler>,
     session_config: Option<TrustedSessionConfig>,
+    pairing_handler: Option<PairingConnectionHandler>,
 ) {
-    tokio::spawn(run_inbound_accept_loop(transport, handler, session_config));
+    tokio::spawn(run_inbound_accept_loop(
+        transport,
+        handler,
+        session_config,
+        pairing_handler,
+    ));
 }
 
 async fn run_inbound_accept_loop(
     transport: Arc<dyn Transport>,
     handler: Option<PeerConnectionHandler>,
     session_config: Option<TrustedSessionConfig>,
+    pairing_handler: Option<PairingConnectionHandler>,
 ) {
     let admission = inbound_handshake_admission();
     let mut error_backoff = AcceptErrorBackoff::default();
@@ -184,17 +254,38 @@ async fn run_inbound_accept_loop(
                 info!(%peer, ?kind, "accepted peer connection");
                 let session_config = session_config.clone();
                 let handler = handler.clone();
+                let pairing_handler = pairing_handler.clone();
                 tokio::spawn(async move {
-                    let secured = secure_connection(connection, session_config).await;
-                    // Admission limits only unauthenticated handshakes. A live,
-                    // authenticated session must not consume this permit.
-                    drop(permit);
-                    match secured {
-                        Ok(connection) => {
-                            run_managed_session(connection, handler, ConnectionOrigin::Inbound)
-                                .await;
+                    match classify_inbound_connection(connection).await {
+                        Ok(InboundConnection::Pairing(connection)) => {
+                            drop(permit);
+                            if let Some(pairing_handler) = pairing_handler {
+                                pairing_handler(connection);
+                            } else {
+                                warn!(%peer, "automatic pairing request rejected; no responder");
+                            }
                         }
-                        Err(error) => log_handshake_failure(&error),
+                        Ok(InboundConnection::Trusted(connection)) => {
+                            let secured = secure_connection(connection, session_config).await;
+                            // Admission limits only unauthenticated handshakes. A
+                            // live authenticated session must not consume this permit.
+                            drop(permit);
+                            match secured {
+                                Ok(connection) => {
+                                    run_managed_session(
+                                        connection,
+                                        handler,
+                                        ConnectionOrigin::Inbound,
+                                    )
+                                    .await;
+                                }
+                                Err(error) => log_handshake_failure(&error),
+                            }
+                        }
+                        Err(error) => {
+                            drop(permit);
+                            log_handshake_failure(&error);
+                        }
                     }
                 });
             }
@@ -442,18 +533,90 @@ impl AcceptErrorBackoff {
     }
 }
 
+enum InboundConnection {
+    Pairing(Box<dyn Connection>),
+    Trusted(Box<dyn Connection>),
+}
+
+async fn classify_inbound_connection(
+    connection: Box<dyn Connection>,
+) -> Result<InboundConnection, NetworkError> {
+    let first = tokio::time::timeout(INBOUND_CLASSIFICATION_TIMEOUT, connection.recv())
+        .await
+        .map_err(|_| NetworkError::Timeout)??;
+    let is_pairing = first.kind == nexkvm_protocol::MessageKind::Pairing;
+    let connection: Box<dyn Connection> = Box::new(PrefetchedConnection::new(connection, first));
+    if is_pairing {
+        Ok(InboundConnection::Pairing(connection))
+    } else {
+        Ok(InboundConnection::Trusted(connection))
+    }
+}
+
+struct PrefetchedConnection {
+    inner: Box<dyn Connection>,
+    first: tokio::sync::Mutex<Option<Envelope>>,
+}
+
+impl PrefetchedConnection {
+    fn new(inner: Box<dyn Connection>, first: Envelope) -> Self {
+        Self {
+            inner,
+            first: tokio::sync::Mutex::new(Some(first)),
+        }
+    }
+}
+
+impl std::fmt::Debug for PrefetchedConnection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PrefetchedConnection")
+            .field("kind", &self.inner.kind())
+            .field("peer_addr", &self.inner.peer_addr())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl Connection for PrefetchedConnection {
+    fn kind(&self) -> TransportKind {
+        self.inner.kind()
+    }
+
+    fn peer_addr(&self) -> SocketAddr {
+        self.inner.peer_addr()
+    }
+
+    fn peer_identity(&self) -> Option<PublicKey> {
+        self.inner.peer_identity()
+    }
+
+    async fn send(&self, envelope: Envelope) -> Result<(), NetworkError> {
+        self.inner.send(envelope).await
+    }
+
+    async fn recv(&self) -> Result<Envelope, NetworkError> {
+        if let Some(first) = self.first.lock().await.take() {
+            return Ok(first);
+        }
+        self.inner.recv().await
+    }
+
+    async fn close(&self) -> Result<(), NetworkError> {
+        self.inner.close().await
+    }
+}
+
 async fn secure_connection(
     connection: Box<dyn Connection>,
     session_config: Option<TrustedSessionConfig>,
 ) -> Result<Box<dyn Connection>, NetworkError> {
     match session_config {
         Some(config) => {
-            let secure: SecureConnection = establish_trusted_session(
-                connection,
-                config.local_identity,
-                config.trusted_peer_keys.as_ref(),
-            )
-            .await?;
+            let trusted_peer_keys = config.trusted_peer_keys().await?;
+            let secure: SecureConnection =
+                establish_trusted_session(connection, config.local_identity, &trusted_peer_keys)
+                    .await?;
             Ok(Box::new(secure))
         }
         None => Ok(connection),
@@ -558,6 +721,38 @@ mod tests {
 
         async fn recv(&self) -> Result<Envelope, NetworkError> {
             Err(NetworkError::Closed)
+        }
+
+        async fn close(&self) -> Result<(), NetworkError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FirstEnvelopeConnection {
+        envelope: Mutex<Option<Envelope>>,
+    }
+
+    #[async_trait]
+    impl Connection for FirstEnvelopeConnection {
+        fn kind(&self) -> TransportKind {
+            TransportKind::Tcp
+        }
+
+        fn peer_addr(&self) -> SocketAddr {
+            "127.0.0.1:47654".parse().unwrap()
+        }
+
+        async fn send(&self, _envelope: Envelope) -> Result<(), NetworkError> {
+            Ok(())
+        }
+
+        async fn recv(&self) -> Result<Envelope, NetworkError> {
+            self.envelope
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or(NetworkError::Closed)
         }
 
         async fn close(&self) -> Result<(), NetworkError> {
@@ -745,6 +940,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inbound_classification_preserves_the_trusted_session_hello() {
+        let server_key = DeviceKeypair::from_seed([21; 32]);
+        let client_key = DeviceKeypair::from_seed([22; 32]);
+        let server = TcpTransport::bind(loopback()).await.unwrap();
+        let addr = server.local_addr().unwrap();
+        let server_config =
+            super::TrustedSessionConfig::new(server_key.clone(), vec![client_key.public_key()]);
+        let server_task = tokio::spawn(async move {
+            let raw = server.accept().await.unwrap();
+            let classified = super::classify_inbound_connection(raw).await.unwrap();
+            let super::InboundConnection::Trusted(raw) = classified else {
+                panic!("trusted hello must use the authenticated route");
+            };
+            super::secure_connection(raw, Some(server_config))
+                .await
+                .unwrap()
+        });
+
+        let client: Arc<dyn Transport> = Arc::new(TcpTransport::bind(loopback()).await.unwrap());
+        let raw = client.connect(addr).await.unwrap();
+        let client_connection = super::secure_connection(
+            raw,
+            Some(super::TrustedSessionConfig::new(
+                client_key,
+                vec![server_key.public_key()],
+            )),
+        );
+        let (client_connection, server_connection) = tokio::join!(client_connection, server_task);
+        let client_connection = client_connection.unwrap();
+        let server_connection = server_connection.unwrap();
+
+        assert_eq!(
+            client_connection.peer_identity(),
+            Some(server_key.public_key())
+        );
+        assert_eq!(
+            server_connection.peer_identity(),
+            Some(DeviceKeypair::from_seed([22; 32]).public_key())
+        );
+    }
+
+    #[tokio::test]
     async fn explicit_driver_reconnects_after_managed_session_ends() {
         let connects = Arc::new(AtomicUsize::new(0));
         let transport: Arc<dyn Transport> = Arc::new(CountingTransport {
@@ -893,6 +1130,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inbound_pairing_envelope_is_routed_before_trusted_session_authentication() {
+        use bytes::Bytes;
+        use nexkvm_protocol::{MessageId, MessageKind, PROTOCOL_VERSION};
+
+        let connection = Box::new(FirstEnvelopeConnection {
+            envelope: Mutex::new(Some(Envelope::new(
+                PROTOCOL_VERSION,
+                MessageId::ZERO,
+                MessageKind::Pairing,
+                Bytes::from_static(b"pairing request"),
+            ))),
+        });
+
+        let classified = super::classify_inbound_connection(connection)
+            .await
+            .unwrap();
+        let super::InboundConnection::Pairing(connection) = classified else {
+            panic!("pairing envelope must use the unauthenticated pairing route");
+        };
+
+        let replayed = connection.recv().await.unwrap();
+        assert_eq!(replayed.kind, MessageKind::Pairing);
+        assert_eq!(replayed.body, Bytes::from_static(b"pairing request"));
+    }
+
+    #[tokio::test]
     async fn accept_loop_drops_connections_above_pre_auth_capacity() {
         let accepts = Arc::new(AtomicUsize::new(0));
         let dropped = Arc::new(AtomicUsize::new(0));
@@ -914,6 +1177,7 @@ mod tests {
                 DeviceKeypair::from_seed([7; 32]),
                 Vec::new(),
             )),
+            None,
         ));
 
         wait_for_count(&accepts, super::MAX_PENDING_INBOUND_HANDSHAKES + 1).await;
