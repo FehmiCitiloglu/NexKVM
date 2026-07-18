@@ -52,6 +52,8 @@ planned.
   confirmation codes, two-sided approval, persistence-status exchange,
   rollback on ordinary failure, and automatic Connect address/Active peer
   configuration.
+- [x] GUI `pair-auto` initiation and incoming confirmation surface for
+  GUI-owned daemons, including peer fingerprint and matching-code approval.
 - [x] `nexkvm pairing-uri <addr>` command for generating a testable pairing
   bootstrap URI.
 - [x] `nexkvm permissions` command for prompting/reporting required macOS

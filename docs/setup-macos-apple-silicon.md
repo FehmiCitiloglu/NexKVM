@@ -74,8 +74,11 @@ users approve and both devices report successful persistence; ordinary
 persistence or connection failures roll back the local update. Restart any
 already-running daemon afterward so the new runtime connection settings load.
 
-The GUI-launched daemon does not currently provide an interactive confirmation
-surface for `pair-auto`; use a terminal daemon for this ceremony.
+The GUI provides the same flow under **Pairing & Output → Automatic mutual
+pairing**. Enter the peer's listening address on the initiating Mac. Both GUIs
+show the peer identity, fingerprint, and six-digit code; approve only after the
+codes match. A daemon started outside the GUI continues to use its terminal for
+the incoming confirmation.
 
 The pairing-URI flow remains available as a manual fallback. Pairing is mutual:
 each Mac must pin the other Mac's public key. On Mac A, generate a pairing URI

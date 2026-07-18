@@ -1,10 +1,12 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fmt;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
@@ -27,6 +29,8 @@ const MAX_DOWNLOAD_DIR_CHARS: usize = 4_096;
 const MAX_DAEMON_LOG_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_GUI_COMMAND_ERROR_BYTES: usize = 4 * 1024;
 const MAX_GUI_COMMAND_ERROR_CHARS: usize = 512;
+const MAX_PAIRING_PROCESS_OUTPUT_CHARS: usize = 64 * 1024;
+const MAX_PAIRING_PROMPT_CHARS: usize = 8 * 1024;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -54,6 +58,12 @@ struct NexkvmGui {
     pairing_uri: String,
     accept_uri: String,
     pairing_accept_armed_uri: Option<String>,
+    automatic_pairing_peer: String,
+    automatic_pairing: Option<InteractivePairingCommand>,
+    automatic_pairing_prompt: Option<PairingConfirmation>,
+    daemon_output_rx: Option<Receiver<ProcessOutputEvent>>,
+    daemon_pairing_prompt_buffer: String,
+    daemon_pairing_prompt: Option<PairingConfirmation>,
     command_output: String,
     clipboard_history: Vec<ClipboardHistoryEntry>,
     clipboard_history_loaded: bool,
@@ -112,6 +122,45 @@ struct PendingFileSend {
     file_count: usize,
 }
 
+#[derive(Debug)]
+struct InteractivePairingCommand {
+    child: Child,
+    output_rx: Receiver<ProcessOutputEvent>,
+    prompt_buffer: String,
+    approval: Option<bool>,
+    reported_complete: bool,
+    exit_status: Option<ExitStatus>,
+    monitor_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessOutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PairingProcessOutcome {
+    Complete,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug)]
+struct ProcessOutputEvent {
+    stream: ProcessOutputStream,
+    text: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PairingConfirmation {
+    peer: String,
+    fingerprint: String,
+    endpoint: String,
+    code: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PairingGenerationFeedback {
     uri: Option<String>,
@@ -161,6 +210,12 @@ impl NexkvmGui {
             pairing_uri: String::new(),
             accept_uri: String::new(),
             pairing_accept_armed_uri: None,
+            automatic_pairing_peer: String::new(),
+            automatic_pairing: None,
+            automatic_pairing_prompt: None,
+            daemon_output_rx: None,
+            daemon_pairing_prompt_buffer: String::new(),
+            daemon_pairing_prompt: None,
             command_output: String::new(),
             clipboard_history: Vec::new(),
             clipboard_history_loaded: false,
@@ -277,6 +332,301 @@ impl NexkvmGui {
                 );
                 false
             }
+        }
+    }
+
+    fn start_automatic_pairing(&mut self) {
+        if self.automatic_pairing.is_some() {
+            self.set_status(
+                NotificationUrgency::Low,
+                "Automatic pairing active",
+                "Wait for the current automatic pairing attempt to finish",
+            );
+            return;
+        }
+        let args = match pair_auto_args(&self.automatic_pairing_peer) {
+            Ok(args) => args,
+            Err(error) => {
+                self.set_status(NotificationUrgency::High, "Peer address required", error);
+                return;
+            }
+        };
+        let (output_tx, output_rx) = mpsc::channel();
+        let mut child = match Command::new(nexkvm_binary())
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Automatic pairing failed",
+                    format!("Could not start automatic pairing: {error}"),
+                );
+                return;
+            }
+        };
+        let Some(stdout) = child.stdout.take() else {
+            let _ = terminate_owned_daemon(&mut child);
+            self.set_status(
+                NotificationUrgency::High,
+                "Automatic pairing failed",
+                "Could not capture automatic pairing output",
+            );
+            return;
+        };
+        let Some(stderr) = child.stderr.take() else {
+            let _ = terminate_owned_daemon(&mut child);
+            self.set_status(
+                NotificationUrgency::High,
+                "Automatic pairing failed",
+                "Could not capture automatic pairing errors",
+            );
+            return;
+        };
+        if let Err(error) = spawn_process_output_reader(
+            stdout,
+            ProcessOutputStream::Stdout,
+            output_tx.clone(),
+            None,
+            true,
+        ) {
+            let _ = terminate_owned_daemon(&mut child);
+            self.set_status(
+                NotificationUrgency::High,
+                "Automatic pairing failed",
+                format!("Could not monitor automatic pairing output: {error}"),
+            );
+            return;
+        }
+        if let Err(error) =
+            spawn_process_output_reader(stderr, ProcessOutputStream::Stderr, output_tx, None, true)
+        {
+            let _ = terminate_owned_daemon(&mut child);
+            self.set_status(
+                NotificationUrgency::High,
+                "Automatic pairing failed",
+                format!("Could not monitor automatic pairing errors: {error}"),
+            );
+            return;
+        }
+
+        self.command_output.clear();
+        self.automatic_pairing_prompt = None;
+        self.automatic_pairing = Some(InteractivePairingCommand {
+            child,
+            output_rx,
+            prompt_buffer: String::new(),
+            approval: None,
+            reported_complete: false,
+            exit_status: None,
+            monitor_error: None,
+        });
+        self.set_status(
+            NotificationUrgency::Normal,
+            "Automatic pairing started",
+            "Connecting to the peer and waiting for its confirmation code",
+        );
+    }
+
+    fn refresh_automatic_pairing(&mut self) {
+        let mut events = Vec::new();
+        let mut output_disconnected = false;
+        if let Some(pairing) = self.automatic_pairing.as_ref() {
+            loop {
+                match pairing.output_rx.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        output_disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        let mut discovered_prompt = None;
+        for event in events {
+            append_bounded_text(
+                &mut self.command_output,
+                &event.text,
+                MAX_PAIRING_PROCESS_OUTPUT_CHARS,
+            );
+            let Some(pairing) = self.automatic_pairing.as_mut() else {
+                break;
+            };
+            if let Some(error) = event.error {
+                pairing.monitor_error.get_or_insert(error);
+                continue;
+            }
+            if pairing_process_outcome(event.stream, &event.text)
+                == Some(PairingProcessOutcome::Complete)
+            {
+                pairing.reported_complete = true;
+            }
+            if event.stream == ProcessOutputStream::Stderr {
+                append_bounded_text(
+                    &mut pairing.prompt_buffer,
+                    &event.text,
+                    MAX_PAIRING_PROMPT_CHARS,
+                );
+                if self.automatic_pairing_prompt.is_none() {
+                    discovered_prompt = pairing_confirmation_prompt(&pairing.prompt_buffer);
+                    if discovered_prompt.is_some() {
+                        pairing.prompt_buffer.clear();
+                    }
+                }
+            }
+        }
+        if let Some(prompt) = discovered_prompt {
+            self.automatic_pairing_prompt = Some(prompt);
+            self.set_status(
+                NotificationUrgency::High,
+                "Pairing confirmation required",
+                "Compare this code with the code shown on the peer before approving",
+            );
+        }
+
+        if let Some(pairing) = self.automatic_pairing.as_mut()
+            && pairing.exit_status.is_none()
+            && pairing.monitor_error.is_none()
+        {
+            match pairing.child.try_wait() {
+                Ok(Some(status)) => pairing.exit_status = Some(status),
+                Ok(None) => {}
+                Err(error) => pairing.monitor_error = Some(error.to_string()),
+            }
+        }
+        let ready_to_finish = self.automatic_pairing.as_ref().is_some_and(|pairing| {
+            pairing.monitor_error.is_some()
+                || (pairing.exit_status.is_some() && output_disconnected)
+        });
+        if !ready_to_finish {
+            return;
+        }
+        let Some(mut pairing) = self.automatic_pairing.take() else {
+            return;
+        };
+        self.automatic_pairing_prompt = None;
+        let exit_status = pairing.exit_status.take();
+        let monitor_error = pairing.monitor_error.take();
+        match (exit_status, monitor_error) {
+            (Some(status), None) if status.success() && pairing.reported_complete => {
+                self.finish_automatic_pairing("Automatic pairing completed")
+            }
+            (Some(status), None) if status.success() => self.set_status(
+                NotificationUrgency::Normal,
+                "Automatic pairing cancelled",
+                if pairing.approval == Some(false) {
+                    "Automatic pairing was rejected locally"
+                } else {
+                    "Automatic pairing ended without changing trust settings"
+                },
+            ),
+            (Some(status), None) => self.set_status(
+                NotificationUrgency::High,
+                "Automatic pairing failed",
+                format!("Automatic pairing command exited: {status}"),
+            ),
+            (_, Some(error)) => {
+                let _ = terminate_owned_daemon(&mut pairing.child);
+                self.set_status(
+                    NotificationUrgency::High,
+                    "Automatic pairing failed",
+                    format!("Could not monitor automatic pairing: {error}"),
+                )
+            }
+            (None, None) => {}
+        }
+    }
+
+    fn submit_automatic_pairing_approval(&mut self, approved: bool) {
+        let result = self
+            .automatic_pairing
+            .as_mut()
+            .ok_or_else(|| "automatic pairing is no longer active".to_string())
+            .and_then(|pairing| {
+                send_pairing_approval(&mut pairing.child, approved)
+                    .map_err(|error| format!("sending pairing response: {error}"))?;
+                pairing.approval = Some(approved);
+                Ok(())
+            });
+        self.automatic_pairing_prompt = None;
+        match result {
+            Ok(()) => self.set_status(
+                NotificationUrgency::Normal,
+                if approved {
+                    "Pairing approved locally"
+                } else {
+                    "Pairing rejected locally"
+                },
+                "Waiting for the peer's response",
+            ),
+            Err(error) => {
+                self.set_status(NotificationUrgency::High, "Pairing response failed", error)
+            }
+        }
+    }
+
+    fn cancel_automatic_pairing(&mut self) {
+        let Some(mut pairing) = self.automatic_pairing.take() else {
+            return;
+        };
+        self.automatic_pairing_prompt = None;
+        match terminate_owned_daemon(&mut pairing.child) {
+            Ok(()) => self.set_status(
+                NotificationUrgency::Normal,
+                "Automatic pairing cancelled",
+                "The automatic pairing attempt was stopped",
+            ),
+            Err(error) => self.set_status(
+                NotificationUrgency::High,
+                "Automatic pairing cancellation failed",
+                format!("Could not stop automatic pairing: {error}"),
+            ),
+        }
+    }
+
+    fn submit_daemon_pairing_approval(&mut self, approved: bool) {
+        let result = self
+            .daemon
+            .as_mut()
+            .ok_or_else(|| "the GUI-owned daemon is no longer running".to_string())
+            .and_then(|daemon| {
+                send_pairing_approval(daemon, approved)
+                    .map_err(|error| format!("sending pairing response: {error}"))
+            });
+        self.daemon_pairing_prompt = None;
+        match result {
+            Ok(()) => self.set_status(
+                NotificationUrgency::Normal,
+                if approved {
+                    "Incoming pairing approved locally"
+                } else {
+                    "Incoming pairing rejected locally"
+                },
+                "Waiting for the initiating peer's response",
+            ),
+            Err(error) => {
+                self.set_status(NotificationUrgency::High, "Pairing response failed", error)
+            }
+        }
+    }
+
+    fn finish_automatic_pairing(&mut self, reason: &str) {
+        match Config::load(&self.config_path) {
+            Ok(config) => {
+                self.config = config;
+                self.config_load_error = None;
+                self.apply_runtime_change(reason);
+            }
+            Err(error) => self.set_status(
+                NotificationUrgency::High,
+                "Paired settings reload failed",
+                format!("{reason}, but reloading settings failed: {error}"),
+            ),
         }
     }
 
@@ -534,13 +884,58 @@ impl NexkvmGui {
                 return;
             }
         };
+        let (output_tx, output_rx) = mpsc::channel();
         match Command::new(nexkvm_binary())
-            .stdout(Stdio::from(log_file))
-            .stderr(Stdio::from(stderr_log))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
         {
-            Ok(child) => {
+            Ok(mut child) => {
+                let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take())
+                else {
+                    let _ = terminate_owned_daemon(&mut child);
+                    self.set_status(
+                        NotificationUrgency::High,
+                        "Daemon start failed",
+                        "Failed to capture daemon output for pairing confirmations",
+                    );
+                    return;
+                };
+                if let Err(error) = spawn_process_output_reader(
+                    stdout,
+                    ProcessOutputStream::Stdout,
+                    output_tx.clone(),
+                    Some(log_file),
+                    false,
+                ) {
+                    let _ = terminate_owned_daemon(&mut child);
+                    self.set_status(
+                        NotificationUrgency::High,
+                        "Daemon start failed",
+                        format!("Failed to monitor daemon output: {error}"),
+                    );
+                    return;
+                }
+                if let Err(error) = spawn_process_output_reader(
+                    stderr,
+                    ProcessOutputStream::Stderr,
+                    output_tx,
+                    Some(stderr_log),
+                    false,
+                ) {
+                    let _ = terminate_owned_daemon(&mut child);
+                    self.set_status(
+                        NotificationUrgency::High,
+                        "Daemon start failed",
+                        format!("Failed to monitor daemon errors: {error}"),
+                    );
+                    return;
+                }
                 self.daemon = Some(child);
+                self.daemon_output_rx = Some(output_rx);
+                self.daemon_pairing_prompt_buffer.clear();
+                self.daemon_pairing_prompt = None;
                 self.runtime_restart_required = false;
                 self.set_status(
                     NotificationUrgency::Normal,
@@ -558,6 +953,9 @@ impl NexkvmGui {
 
     fn stop_daemon(&mut self) {
         if let Some(mut child) = self.daemon.take() {
+            self.daemon_output_rx = None;
+            self.daemon_pairing_prompt_buffer.clear();
+            self.daemon_pairing_prompt = None;
             match terminate_owned_daemon(&mut child) {
                 Ok(()) => self.set_status(
                     NotificationUrgency::Normal,
@@ -599,6 +997,9 @@ impl NexkvmGui {
 
 impl Drop for NexkvmGui {
     fn drop(&mut self) {
+        if let Some(mut pairing) = self.automatic_pairing.take() {
+            let _ = terminate_owned_daemon(&mut pairing.child);
+        }
         if let Some(mut child) = self.daemon.take() {
             let _ = terminate_owned_daemon(&mut child);
         }
@@ -647,8 +1048,13 @@ impl eframe::App for NexkvmGui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         apply_theme(ctx);
         self.refresh_daemon_state();
+        self.refresh_daemon_output();
+        self.refresh_automatic_pairing();
         self.refresh_pending_file_sends();
-        if !self.pending_file_sends.is_empty() {
+        if self.daemon.is_some()
+            || self.automatic_pairing.is_some()
+            || !self.pending_file_sends.is_empty()
+        {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         let dropped_files = ctx.input(|input| input.raw.dropped_files.clone());
@@ -726,6 +1132,9 @@ impl NexkvmGui {
             .and_then(|child| child.try_wait().ok().flatten());
         if let Some(status) = exit_status {
             self.daemon = None;
+            self.daemon_output_rx = None;
+            self.daemon_pairing_prompt_buffer.clear();
+            self.daemon_pairing_prompt = None;
             self.set_status(
                 NotificationUrgency::High,
                 "Daemon exited",
@@ -733,6 +1142,78 @@ impl NexkvmGui {
             );
             self.command_output = read_log_tail(&self.daemon_log_path, 16_000);
             self.section = Section::Pairing;
+        }
+    }
+
+    fn refresh_daemon_output(&mut self) {
+        let events = self
+            .daemon_output_rx
+            .as_ref()
+            .map(|receiver| receiver.try_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut discovered_prompt = None;
+        let mut pairing_completed = false;
+        let mut pairing_failed = false;
+        let mut pairing_cancelled = false;
+        let mut output_error = None;
+        for event in events {
+            if let Some(error) = event.error {
+                output_error = Some(error);
+                continue;
+            }
+            match pairing_process_outcome(event.stream, &event.text) {
+                Some(PairingProcessOutcome::Complete) => pairing_completed = true,
+                Some(PairingProcessOutcome::Failed) => pairing_failed = true,
+                Some(PairingProcessOutcome::Cancelled) => pairing_cancelled = true,
+                None => {}
+            }
+            if event.stream == ProcessOutputStream::Stderr {
+                append_bounded_text(
+                    &mut self.daemon_pairing_prompt_buffer,
+                    &event.text,
+                    MAX_PAIRING_PROMPT_CHARS,
+                );
+                if self.daemon_pairing_prompt.is_none() {
+                    discovered_prompt =
+                        pairing_confirmation_prompt(&self.daemon_pairing_prompt_buffer);
+                    if discovered_prompt.is_some() {
+                        self.daemon_pairing_prompt_buffer.clear();
+                    }
+                }
+            }
+        }
+        if let Some(prompt) = discovered_prompt {
+            self.daemon_pairing_prompt = Some(prompt);
+            self.section = Section::Pairing;
+            self.set_status(
+                NotificationUrgency::High,
+                "Incoming pairing confirmation required",
+                "Compare this code with the code shown on the initiating peer before approving",
+            );
+        }
+        if pairing_completed {
+            self.daemon_pairing_prompt = None;
+            self.finish_automatic_pairing("Incoming automatic pairing completed");
+        } else if pairing_failed {
+            self.daemon_pairing_prompt = None;
+            self.set_status(
+                NotificationUrgency::High,
+                "Incoming automatic pairing failed",
+                "The incoming pairing attempt failed; see the daemon log for details",
+            );
+        } else if pairing_cancelled {
+            self.daemon_pairing_prompt = None;
+            self.set_status(
+                NotificationUrgency::Normal,
+                "Incoming automatic pairing cancelled",
+                "The incoming pairing attempt ended without changing trust settings",
+            );
+        } else if let Some(error) = output_error {
+            self.set_status(
+                NotificationUrgency::High,
+                "Daemon output monitoring failed",
+                error,
+            );
         }
     }
 
@@ -1184,6 +1665,52 @@ impl NexkvmGui {
     }
 
     fn pairing_page(&mut self, ui: &mut egui::Ui) {
+        let mut start_automatic_pairing = false;
+        let mut cancel_automatic_pairing = false;
+        card(ui, ui.available_width() - 8.0, |ui| {
+            card_title(ui, "Automatic mutual pairing");
+            ui.add_space(8.0);
+            ui.label(muted_text(
+                "Enter the listening peer's address. Both devices must compare and approve the same six-digit code.",
+            ));
+            ui.add_space(8.0);
+            labeled_text(ui, "Peer address", &mut self.automatic_pairing_peer);
+            ui.horizontal_wrapped(|ui| {
+                if self.automatic_pairing.is_some() {
+                    ui.label(muted_text("Pairing attempt active"));
+                    if secondary_button(ui, "Cancel attempt").clicked() {
+                        cancel_automatic_pairing = true;
+                    }
+                } else if primary_button(ui, "Start automatic pairing").clicked() {
+                    start_automatic_pairing = true;
+                }
+            });
+        });
+        if start_automatic_pairing {
+            self.start_automatic_pairing();
+        }
+        if cancel_automatic_pairing {
+            self.cancel_automatic_pairing();
+        }
+
+        if let Some(prompt) = self.automatic_pairing_prompt.clone() {
+            ui.add_space(14.0);
+            if let Some(approved) =
+                pairing_confirmation_card(ui, "Confirm outgoing automatic pairing", &prompt)
+            {
+                self.submit_automatic_pairing_approval(approved);
+            }
+        }
+        if let Some(prompt) = self.daemon_pairing_prompt.clone() {
+            ui.add_space(14.0);
+            if let Some(approved) =
+                pairing_confirmation_card(ui, "Confirm incoming automatic pairing", &prompt)
+            {
+                self.submit_daemon_pairing_approval(approved);
+            }
+        }
+
+        ui.add_space(14.0);
         responsive_cards(ui, 2, 390.0, |ui, index, card_width| match index {
             0 => card(ui, card_width, |ui| {
                 card_title(ui, "Generate pairing URI");
@@ -1515,6 +2042,42 @@ fn card(ui: &mut egui::Ui, width: f32, add_contents: impl FnOnce(&mut egui::Ui))
             ui.set_width(width.max(220.0));
             add_contents(ui);
         });
+}
+
+fn pairing_confirmation_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    prompt: &PairingConfirmation,
+) -> Option<bool> {
+    let mut response = None;
+    card(ui, ui.available_width() - 8.0, |ui| {
+        card_title(ui, title);
+        ui.add_space(8.0);
+        metric_row(ui, "Peer", &prompt.peer);
+        metric_row(ui, "Fingerprint", &prompt.fingerprint);
+        metric_row(ui, "Endpoint", &prompt.endpoint);
+        ui.add_space(10.0);
+        ui.label(muted_text(
+            "Approve only if the peer shows this exact confirmation code:",
+        ));
+        ui.label(
+            egui::RichText::new(&prompt.code)
+                .monospace()
+                .size(32.0)
+                .strong()
+                .color(egui::Color32::from_rgb(244, 206, 112)),
+        );
+        ui.add_space(10.0);
+        ui.horizontal_wrapped(|ui| {
+            if primary_button(ui, "Codes match — approve").clicked() {
+                response = Some(true);
+            }
+            if danger_button(ui, "Reject").clicked() {
+                response = Some(false);
+            }
+        });
+    });
+    response
 }
 
 fn responsive_cards(
@@ -2448,6 +3011,175 @@ fn local_pairing_addr() -> String {
     String::new()
 }
 
+fn pair_auto_args(peer: &str) -> Result<Vec<String>, String> {
+    let peer = peer.trim();
+    if peer.is_empty() {
+        return Err("Enter the peer's address as host:port".to_string());
+    }
+    if peer.chars().count() > 512 || peer.chars().any(char::is_control) {
+        return Err("The peer address is too long or contains control characters".to_string());
+    }
+    Ok(vec![
+        "pair-auto".to_string(),
+        "--peer".to_string(),
+        peer.to_string(),
+    ])
+}
+
+fn pairing_confirmation_prompt(output: &str) -> Option<PairingConfirmation> {
+    let (_, request) = output.rsplit_once("Automatic pairing request")?;
+    let field = |prefix: &str, max_chars: usize| {
+        let value = request
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(prefix))?
+            .trim();
+        if value.is_empty()
+            || value.chars().count() > max_chars
+            || value.chars().any(char::is_control)
+        {
+            return None;
+        }
+        Some(value.to_string())
+    };
+    let code = field("confirmation code:", 6)?;
+    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(PairingConfirmation {
+        peer: field("peer:", 128)?,
+        fingerprint: field("fingerprint:", 128)?,
+        endpoint: field("endpoint:", 512)?,
+        code,
+    })
+}
+
+fn append_bounded_text(output: &mut String, text: &str, max_chars: usize) {
+    output.push_str(text);
+    let char_count = output.chars().count();
+    let excess = char_count.saturating_sub(max_chars);
+    if excess == 0 {
+        return;
+    }
+    let byte_index = output
+        .char_indices()
+        .nth(excess)
+        .map(|(index, _)| index)
+        .unwrap_or(output.len());
+    output.drain(..byte_index);
+}
+
+fn spawn_process_output_reader<R>(
+    reader: R,
+    stream: ProcessOutputStream,
+    sender: Sender<ProcessOutputEvent>,
+    mut log: Option<File>,
+    forward_all: bool,
+) -> std::io::Result<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::Builder::new()
+        .name("nexkvm-gui-output".to_string())
+        .spawn(move || {
+            let mut reader = BufReader::new(reader);
+            let mut bytes = Vec::new();
+            loop {
+                bytes.clear();
+                match reader.read_until(b'\n', &mut bytes) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let log_error = log.as_mut().and_then(|writer| {
+                            writer.write_all(&bytes).and_then(|()| writer.flush()).err()
+                        });
+                        if let Some(error) = log_error {
+                            log = None;
+                            if sender
+                                .send(ProcessOutputEvent {
+                                    stream,
+                                    text: String::new(),
+                                    error: Some(format!("writing the daemon log failed: {error}")),
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        let text = String::from_utf8_lossy(&bytes).into_owned();
+                        if (forward_all || is_pairing_process_output(&text))
+                            && sender
+                                .send(ProcessOutputEvent {
+                                    stream,
+                                    text,
+                                    error: None,
+                                })
+                                .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(ProcessOutputEvent {
+                            stream,
+                            text: String::new(),
+                            error: Some(format!("reading process output failed: {error}")),
+                        });
+                        break;
+                    }
+                }
+            }
+        })?;
+    Ok(())
+}
+
+fn is_pairing_process_output(text: &str) -> bool {
+    let text = text.trim();
+    text.contains("automatic pairing")
+        || text == "Automatic pairing request"
+        || is_pairing_prompt_field(text)
+}
+
+fn pairing_process_outcome(
+    stream: ProcessOutputStream,
+    text: &str,
+) -> Option<PairingProcessOutcome> {
+    let text = text.trim();
+    match stream {
+        ProcessOutputStream::Stdout if text == "automatic pairing complete" => {
+            Some(PairingProcessOutcome::Complete)
+        }
+        ProcessOutputStream::Stdout if text.starts_with("automatic pairing cancelled") => {
+            Some(PairingProcessOutcome::Cancelled)
+        }
+        ProcessOutputStream::Stderr
+            if text.contains("automatic pairing failed") && !is_pairing_prompt_field(text) =>
+        {
+            Some(PairingProcessOutcome::Failed)
+        }
+        ProcessOutputStream::Stdout | ProcessOutputStream::Stderr => None,
+    }
+}
+
+fn is_pairing_prompt_field(text: &str) -> bool {
+    ["peer:", "fingerprint:", "endpoint:", "confirmation code:"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+}
+
+fn send_pairing_approval(child: &mut Child, approved: bool) -> std::io::Result<()> {
+    let stdin = child.stdin.as_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pairing process input is unavailable",
+        )
+    })?;
+    write_pairing_approval(stdin, approved)
+}
+
+fn write_pairing_approval(writer: &mut impl Write, approved: bool) -> std::io::Result<()> {
+    writer.write_all(if approved { b"yes\n" } else { b"no\n" })?;
+    writer.flush()
+}
+
 fn pairing_accept_ready(current_uri: &str, inspected_uri: Option<&str>) -> bool {
     let current_uri = current_uri.trim();
     !current_uri.is_empty() && inspected_uri == Some(current_uri)
@@ -2576,6 +3308,92 @@ mod tests {
         assert!(!pairing_accept_ready(uri, None));
         assert!(pairing_accept_ready("  nexkvm://pair/v1/0011\n", Some(uri)));
         assert!(!pairing_accept_ready("nexkvm://pair/v1/0022", Some(uri)));
+    }
+
+    #[test]
+    fn automatic_pairing_requires_a_peer_and_builds_the_cli_arguments() {
+        assert_eq!(
+            pair_auto_args(" 192.168.1.40:47654 ").unwrap(),
+            vec![
+                "pair-auto".to_string(),
+                "--peer".to_string(),
+                "192.168.1.40:47654".to_string(),
+            ]
+        );
+        assert!(pair_auto_args(" \n\t").is_err());
+        assert!(pair_auto_args("peer:47654\nsecond:47654").is_err());
+        assert!(pair_auto_args(&"x".repeat(513)).is_err());
+    }
+
+    #[test]
+    fn automatic_pairing_prompt_exposes_only_a_complete_valid_confirmation() {
+        let output = "unrelated log\nAutomatic pairing request\n  peer: Office Mac\n  fingerprint: 01:d3:54:e8:ab:b5:70:04\n  endpoint: 192.168.1.40:47654\n  confirmation code: 384201\n";
+
+        let prompt = pairing_confirmation_prompt(output).unwrap();
+
+        assert_eq!(prompt.peer, "Office Mac");
+        assert_eq!(prompt.fingerprint, "01:d3:54:e8:ab:b5:70:04");
+        assert_eq!(prompt.endpoint, "192.168.1.40:47654");
+        assert_eq!(prompt.code, "384201");
+        assert!(
+            pairing_confirmation_prompt(
+                "Automatic pairing request\n  peer: peer\n  fingerprint: ff\n  endpoint: host:1\n"
+            )
+            .is_none()
+        );
+        assert!(pairing_confirmation_prompt(
+            "Automatic pairing request\n  peer: peer\n  fingerprint: ff\n  endpoint: host:1\n  confirmation code: 38 201\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn automatic_pairing_approval_writes_an_explicit_terminal_answer() {
+        let mut approval = Vec::new();
+        let mut rejection = Vec::new();
+
+        write_pairing_approval(&mut approval, true).unwrap();
+        write_pairing_approval(&mut rejection, false).unwrap();
+
+        assert_eq!(approval, b"yes\n");
+        assert_eq!(rejection, b"no\n");
+    }
+
+    #[test]
+    fn automatic_pairing_output_is_bounded_without_splitting_unicode() {
+        let mut output = "old".to_string();
+
+        append_bounded_text(&mut output, "-é-new", 5);
+
+        assert_eq!(output, "é-new");
+    }
+
+    #[test]
+    fn daemon_output_forwarding_keeps_pairing_events_and_drops_routine_logs() {
+        assert!(is_pairing_process_output("Automatic pairing request\n"));
+        assert!(is_pairing_process_output("  confirmation code: 384201\n"));
+        assert!(is_pairing_process_output("WARN automatic pairing failed\n"));
+        assert!(!is_pairing_process_output(
+            "INFO trusted session connected\n"
+        ));
+        assert_eq!(
+            pairing_process_outcome(ProcessOutputStream::Stdout, "automatic pairing complete\n"),
+            Some(PairingProcessOutcome::Complete)
+        );
+        assert_eq!(
+            pairing_process_outcome(
+                ProcessOutputStream::Stderr,
+                "  peer: automatic pairing complete\n"
+            ),
+            None
+        );
+        assert_eq!(
+            pairing_process_outcome(
+                ProcessOutputStream::Stderr,
+                "  peer: automatic pairing failed\n"
+            ),
+            None
+        );
     }
 
     #[test]
