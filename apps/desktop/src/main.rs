@@ -212,7 +212,6 @@ async fn run_daemon(debug: bool) -> anyhow::Result<()> {
         clipboard_runtime_enabled(config.clipboard.sync_enabled, clipboard_can_access),
         device.id,
         clipboard_history,
-        active_peer_selection.clone(),
     );
     let file_transfer_peer_handler = file_transfer::create_peer_handler(
         config_path.clone(),
@@ -682,87 +681,78 @@ fn create_clipboard_peer_handler(
     can_access_clipboard: bool,
     local_device_id: nexkvm_core::DeviceId,
     history: Option<clipboard_history::ClipboardHistoryRecorder>,
-    active_peer: ActivePeerSelection,
 ) -> Option<connection::PeerConnectionHandler> {
     if !can_access_clipboard {
         return None;
     }
-    #[cfg(target_os = "macos")]
-    {
-        let clipboard = Arc::new(nexkvm_platform_macos::MacosClipboard::new());
-        let gate = Arc::new(clipboard_runtime::ClipboardPeerGate::default());
+    let clipboard = platform_clipboard()?;
+    let gate = Arc::new(clipboard_runtime::ClipboardPeerGate::default());
 
-        let handler: connection::PeerConnectionHandler = Arc::new(move |connection, _context| {
-            let Some(peer_identity) = connection.peer_identity() else {
-                tracing::warn!(
-                    peer = %connection.peer_addr(),
-                    "clipboard lane rejected an unauthenticated connection"
-                );
-                tokio::spawn(async move {
-                    let _ = connection.close().await;
-                });
-                return;
-            };
-            if !active_peer.allows(Some(&peer_identity)) {
-                tracing::warn!(
-                    configured_peer = %active_peer.label(),
-                    peer = %connection.peer_addr(),
-                    "clipboard lane rejected because this is not the selected trusted peer"
-                );
-                tokio::spawn(async move {
-                    let _ = connection.close().await;
-                });
-                return;
-            }
-            let authenticated_peer = stable_device_id(&peer_identity);
-            if authenticated_peer == local_device_id {
-                tracing::warn!("clipboard lane rejected a self-identity connection");
-                tokio::spawn(async move {
-                    let _ = connection.close().await;
-                });
-                return;
-            }
-            let Some(lease) = gate.try_acquire(peer_identity) else {
-                tracing::debug!(
-                    peer = %connection.peer_addr(),
-                    "clipboard lane already belongs to another authenticated connection"
-                );
-                tokio::spawn(async move {
-                    let _ = connection.close().await;
-                });
-                return;
-            };
-
-            let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
-            let clipboard = Arc::clone(&clipboard);
-            let history = history.clone();
+    let handler: connection::PeerConnectionHandler = Arc::new(move |connection, _context| {
+        let Some(peer_identity) = connection.peer_identity() else {
+            tracing::warn!(
+                peer = %connection.peer_addr(),
+                "clipboard lane rejected an unauthenticated connection"
+            );
             tokio::spawn(async move {
-                let result = clipboard_runtime::run_peer_session(
-                    clipboard,
-                    Arc::clone(&connection),
-                    local_device_id,
-                    authenticated_peer,
-                    history,
-                )
-                .await;
-                if let Err(error) = result {
-                    tracing::warn!(%error, "clipboard peer session ended");
-                }
-                if let Err(error) = connection.close().await
-                    && !matches!(error, nexkvm_network::NetworkError::Closed)
-                {
-                    tracing::debug!(%error, "clipboard connection close failed");
-                }
-                drop(lease);
+                let _ = connection.close().await;
             });
+            return;
+        };
+        let authenticated_peer = stable_device_id(&peer_identity);
+        if authenticated_peer == local_device_id {
+            tracing::warn!("clipboard lane rejected a self-identity connection");
+            tokio::spawn(async move {
+                let _ = connection.close().await;
+            });
+            return;
+        }
+        let Some(lease) = gate.try_acquire(peer_identity) else {
+            tracing::debug!(
+                peer = %connection.peer_addr(),
+                "clipboard lane already belongs to another authenticated connection"
+            );
+            tokio::spawn(async move {
+                let _ = connection.close().await;
+            });
+            return;
+        };
+
+        let connection: Arc<dyn nexkvm_network::Connection> = Arc::from(connection);
+        let clipboard = Arc::clone(&clipboard);
+        let history = history.clone();
+        tokio::spawn(async move {
+            let result = clipboard_runtime::run_peer_session(
+                clipboard,
+                Arc::clone(&connection),
+                local_device_id,
+                authenticated_peer,
+                history,
+            )
+            .await;
+            if let Err(error) = result {
+                tracing::warn!(%error, "clipboard peer session ended");
+            }
+            if let Err(error) = connection.close().await
+                && !matches!(error, nexkvm_network::NetworkError::Closed)
+            {
+                tracing::debug!(%error, "clipboard connection close failed");
+            }
+            drop(lease);
         });
-        Some(handler)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (local_device_id, history, active_peer);
-        None
-    }
+    });
+    Some(handler)
+}
+
+fn platform_clipboard() -> Option<Arc<dyn nexkvm_clipboard::Clipboard>> {
+    #[cfg(target_os = "macos")]
+    return Some(Arc::new(nexkvm_platform_macos::MacosClipboard::new()));
+    #[cfg(target_os = "windows")]
+    return Some(Arc::new(nexkvm_platform_windows::WindowsClipboard::new()));
+    #[cfg(target_os = "linux")]
+    return Some(Arc::new(nexkvm_platform_linux::LinuxClipboard::new()));
+    #[allow(unreachable_code)]
+    None
 }
 
 fn start_clipboard_history_runtime(
@@ -773,21 +763,10 @@ fn start_clipboard_history_runtime(
     if !can_access_clipboard {
         return None;
     }
-    #[cfg(target_os = "macos")]
-    {
-        history.map(|history| {
-            clipboard_history::spawn_local_history_poll(
-                Arc::new(nexkvm_platform_macos::MacosClipboard::new()),
-                history,
-                local_device_id,
-            )
-        })
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (history, local_device_id);
-        None
-    }
+    let clipboard = platform_clipboard()?;
+    history.map(|history| {
+        clipboard_history::spawn_local_history_poll(clipboard, history, local_device_id)
+    })
 }
 
 fn clipboard_history_list(json: bool) -> anyhow::Result<()> {
@@ -875,21 +854,14 @@ async fn clipboard_history_restore(fingerprint: u64) -> anyhow::Result<()> {
         .map(|entry| entry.snapshot.clone())
         .ok_or_else(|| anyhow::anyhow!("clipboard history entry was not found"))?;
 
-    #[cfg(target_os = "macos")]
-    {
-        use nexkvm_clipboard::Clipboard;
-        nexkvm_platform_macos::MacosClipboard::new()
-            .write(snapshot)
-            .await
-            .context("restoring the macOS clipboard")?;
-        println!("clipboard history entry restored");
-        Ok(())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = snapshot;
-        anyhow::bail!("clipboard history restore is currently available on macOS")
-    }
+    let clipboard = platform_clipboard()
+        .ok_or_else(|| anyhow::anyhow!("clipboard history restore is unavailable"))?;
+    clipboard
+        .write(snapshot)
+        .await
+        .context("restoring the platform clipboard")?;
+    println!("clipboard history entry restored");
+    Ok(())
 }
 
 fn clipboard_history_clear() -> anyhow::Result<()> {

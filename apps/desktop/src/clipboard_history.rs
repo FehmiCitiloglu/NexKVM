@@ -130,7 +130,7 @@ pub fn spawn_local_history_poll<C>(
     local_device_id: DeviceId,
 ) -> tokio::task::JoinHandle<()>
 where
-    C: Clipboard + 'static,
+    C: Clipboard + ?Sized + 'static,
 {
     tokio::spawn(async move {
         let mut last_fingerprint: Option<ContentFingerprint> = None;

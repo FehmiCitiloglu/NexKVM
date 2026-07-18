@@ -1,10 +1,11 @@
-//! Authenticated, single-peer clipboard session orchestration.
+//! Authenticated, multi-peer clipboard session orchestration.
 //!
 //! The transport's trusted session encrypts and authenticates the complete
 //! protocol envelope. Consequently the clipboard state machine deliberately
 //! uses its no-op payload cipher here; accepting this lane without an
 //! authenticated peer identity is forbidden by the caller.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,26 +19,25 @@ use crate::clipboard_history::{self, ClipboardHistoryRecorder};
 
 const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// One active clipboard session per daemon. This intentionally fails closed
-/// for `AnyTrusted`: clipboard fan-out would otherwise consume a local update
-/// on one connection and silently omit it from the others. Users can select a
-/// deterministic peer in configuration; until authenticated relay semantics
-/// exist, a second trusted connection is rejected.
+/// One active clipboard session per authenticated peer.
+///
+/// Every session owns an independent sync resolver, so a local selection is
+/// observed and sent once on each peer link. Duplicate physical connections to
+/// the same identity are rejected to avoid competing writers and echo state.
 #[derive(Debug, Default)]
 pub(crate) struct ClipboardPeerGate {
-    active_peer: Mutex<Option<PublicKey>>,
+    active_peers: Mutex<HashSet<PublicKey>>,
 }
 
 impl ClipboardPeerGate {
     pub(crate) fn try_acquire(self: &Arc<Self>, peer: PublicKey) -> Option<ClipboardPeerLease> {
         let mut active = self
-            .active_peer
+            .active_peers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if active.is_some() {
+        if !active.insert(peer.clone()) {
             return None;
         }
-        *active = Some(peer.clone());
         Some(ClipboardPeerLease {
             gate: Arc::clone(self),
             peer,
@@ -56,12 +56,10 @@ impl Drop for ClipboardPeerLease {
     fn drop(&mut self) {
         let mut active = self
             .gate
-            .active_peer
+            .active_peers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if active.as_ref() == Some(&self.peer) {
-            *active = None;
-        }
+        active.remove(&self.peer);
     }
 }
 
@@ -93,7 +91,7 @@ pub(crate) async fn run_peer_session<C>(
     history: Option<ClipboardHistoryRecorder>,
 ) -> Result<(), ClipboardSessionError>
 where
-    C: Clipboard + 'static,
+    C: Clipboard + ?Sized + 'static,
 {
     run_peer_session_with_interval(
         clipboard,
@@ -115,7 +113,7 @@ async fn run_peer_session_with_interval<C>(
     poll_interval: Duration,
 ) -> Result<(), ClipboardSessionError>
 where
-    C: Clipboard + 'static,
+    C: Clipboard + ?Sized + 'static,
 {
     // SecureConnection seals/authenticates this entire envelope, including the
     // message kind and update body. A second inner cipher would not add a new
@@ -228,6 +226,7 @@ mod tests {
     use nexkvm_clipboard::{ClipboardError, ClipboardSnapshot};
     use nexkvm_crypto::DeviceKeypair;
     use nexkvm_network::TransportKind;
+    use nexkvm_storage::{ClipboardConfig, ClipboardHistoryArchive};
     use tokio::sync::Notify;
 
     use super::*;
@@ -351,14 +350,20 @@ mod tests {
     }
 
     #[test]
-    fn one_lease_rejects_duplicate_and_different_peer_connections() {
+    fn peer_leases_allow_distinct_peers_and_reject_duplicate_connections() {
         let gate = Arc::new(ClipboardPeerGate::default());
         let first = gate.try_acquire(key(1)).expect("first peer lease");
 
         assert!(gate.try_acquire(key(1)).is_none());
-        assert!(gate.try_acquire(key(2)).is_none());
+        let second = gate
+            .try_acquire(key(2))
+            .expect("a different trusted peer gets its own clipboard lane");
 
         drop(first);
+        assert!(gate.try_acquire(key(1)).is_some());
+        assert!(gate.try_acquire(key(2)).is_none());
+
+        drop(second);
         assert!(gate.try_acquire(key(2)).is_some());
     }
 
@@ -436,5 +441,56 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(40)).await;
 
         assert_eq!(clipboard.reads.load(Ordering::SeqCst), reads_after_close);
+    }
+
+    #[tokio::test]
+    async fn authenticated_peer_copy_becomes_local_selection_and_encrypted_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.toml");
+        let config = ClipboardConfig {
+            history_enabled: true,
+            ..ClipboardConfig::default()
+        };
+        let history = ClipboardHistoryRecorder::open(&config_path, &config)
+            .unwrap()
+            .unwrap();
+        let remote = DeviceId::generate();
+        let snapshot = ClipboardSnapshot::from_text("copy from another computer");
+        let mut remote_sync = ClipboardSync::new(remote, Box::new(PlaintextCipher));
+        let update = remote_sync
+            .prepare_outbound(&snapshot, 123)
+            .unwrap()
+            .unwrap();
+        let envelope = Envelope::new(
+            PROTOCOL_VERSION,
+            MessageId(7),
+            MessageKind::Clipboard,
+            update.encode().unwrap(),
+        );
+        let clipboard = TestClipboard::new("old local clipboard");
+        let mut local_sync = ClipboardSync::new(DeviceId::generate(), Box::new(PlaintextCipher));
+
+        receive_and_apply(
+            &clipboard,
+            &mut local_sync,
+            envelope,
+            remote,
+            Some(&history),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            clipboard.writes.lock().unwrap().as_slice(),
+            std::slice::from_ref(&snapshot)
+        );
+        let archive = ClipboardHistoryArchive::open(
+            clipboard_history::archive_path(&config_path),
+            clipboard_history::archive_config(&config),
+        )
+        .unwrap();
+        let entry = archive.entries().next().expect("received item is pooled");
+        assert_eq!(entry.snapshot, snapshot);
+        assert_eq!(entry.origin, remote);
     }
 }

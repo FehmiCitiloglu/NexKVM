@@ -1049,7 +1049,7 @@ impl NexkvmGui {
                 });
                 ui.add_space(8.0);
                 ui.label(muted_text(
-                    "History is encrypted on disk. Previews are shown only in this page and are not copied into GUI notifications.",
+                    "Copies from every connected trusted computer join this encrypted local pool. With sync enabled, restoring an item republishes it. Previews stay on this page.",
                 ));
             }),
             1 => card(ui, card_width, |ui| {
