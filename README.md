@@ -117,3 +117,8 @@ normal macOS workflow.
 
 Screen streaming, audio routing, mobile companions, remote/WAN relay, and the
 plugin marketplace are outside the supported Apple Silicon KVM release scope.
+
+## License
+
+NexKVM is open-source software licensed under the
+[Mozilla Public License 2.0](LICENSE).
