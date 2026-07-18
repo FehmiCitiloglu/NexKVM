@@ -31,10 +31,13 @@ const MAX_GUI_COMMAND_ERROR_BYTES: usize = 4 * 1024;
 const MAX_GUI_COMMAND_ERROR_CHARS: usize = 512;
 const MAX_PAIRING_PROCESS_OUTPUT_CHARS: usize = 64 * 1024;
 const MAX_PAIRING_PROMPT_CHARS: usize = 8 * 1024;
+const CARD_INNER_MARGIN: f32 = 16.0;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1120.0, 740.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1120.0, 740.0])
+            .with_min_inner_size([760.0, 560.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -1098,12 +1101,15 @@ impl eframe::App for NexkvmGui {
 
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.add_space(16.0);
-                    ui.label(muted_text("Config path"));
-                    ui.label(
-                        egui::RichText::new(self.config_path.display().to_string())
-                            .size(11.0)
-                            .color(egui::Color32::from_rgb(188, 197, 210)),
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(self.config_path.display().to_string())
+                                .size(11.0)
+                                .color(egui::Color32::from_rgb(188, 197, 210)),
+                        )
+                        .wrap(),
                     );
+                    ui.label(muted_text("Config path"));
                 });
             });
 
@@ -1111,15 +1117,13 @@ impl eframe::App for NexkvmGui {
             ui.add_space(22.0);
             page_header(ui, self.section, &self.config.device.name);
             ui.add_space(16.0);
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| match self.section {
-                    Section::Overview => self.overview_page(ui),
-                    Section::Settings => self.settings_page(ui),
-                    Section::Sharing => self.sharing_page(ui),
-                    Section::Pairing => self.pairing_page(ui),
-                    Section::Notifications => self.notifications_page(ui),
-                });
+            page_scroll_area(ui, |ui| match self.section {
+                Section::Overview => self.overview_page(ui),
+                Section::Settings => self.settings_page(ui),
+                Section::Sharing => self.sharing_page(ui),
+                Section::Pairing => self.pairing_page(ui),
+                Section::Notifications => self.notifications_page(ui),
+            });
         });
     }
 }
@@ -2037,11 +2041,30 @@ fn card(ui: &mut egui::Ui, width: f32, add_contents: impl FnOnce(&mut egui::Ui))
     egui::Frame::default()
         .fill(card_bg())
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(47, 57, 72)))
-        .inner_margin(16.0)
+        .inner_margin(CARD_INNER_MARGIN)
         .show(ui, |ui| {
-            ui.set_width(width.max(220.0));
-            add_contents(ui);
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.set_width(card_content_width(width.max(220.0)));
+                add_contents(ui);
+            });
         });
+}
+
+fn card_content_width(outer_width: f32) -> f32 {
+    outer_width - CARD_INNER_MARGIN * 2.0
+}
+
+fn page_scroll_area<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::containers::scroll_area::ScrollAreaOutput<R> {
+    let page_width = ui.available_width();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_width(page_width);
+            add_contents(ui)
+        })
 }
 
 fn pairing_confirmation_card(
@@ -3464,6 +3487,40 @@ mod tests {
             Some(InputHandoffEdge::Bottom)
         );
         assert_eq!(edge_from_drag_delta(egui::vec2(10.0, 10.0)), None);
+    }
+
+    #[test]
+    fn responsive_card_width_includes_its_horizontal_padding() {
+        assert_eq!(card_content_width(280.0), 248.0);
+        assert_eq!(card_content_width(220.0), 188.0);
+    }
+
+    #[test]
+    fn page_scroll_area_keeps_content_within_its_viewport() {
+        egui::__run_test_ui(|ui| {
+            ui.set_width(640.0);
+            let output = page_scroll_area(ui, |ui| {
+                card(ui, ui.available_width() - 8.0, |ui| {
+                    ui.label("bounded content");
+                });
+            });
+
+            assert!(output.content_size.x <= output.inner_rect.width() + 1.0);
+        });
+    }
+
+    #[test]
+    fn cards_stack_contents_vertically_inside_horizontal_grids() {
+        egui::__run_test_ui(|ui| {
+            ui.horizontal(|ui| {
+                card(ui, 280.0, |ui| {
+                    let first = ui.label("first").rect;
+                    let second = ui.label("second").rect;
+
+                    assert!(second.top() > first.top());
+                });
+            });
+        });
     }
 
     #[test]
