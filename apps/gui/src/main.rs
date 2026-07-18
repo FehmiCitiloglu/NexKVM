@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use eframe::egui;
 use nexkvm_storage::{Config, InputControlRole, InputHandoffEdge};
@@ -31,6 +31,7 @@ const MAX_GUI_COMMAND_ERROR_BYTES: usize = 4 * 1024;
 const MAX_GUI_COMMAND_ERROR_CHARS: usize = 512;
 const MAX_PAIRING_PROCESS_OUTPUT_CHARS: usize = 64 * 1024;
 const MAX_PAIRING_PROMPT_CHARS: usize = 8 * 1024;
+const CLIPBOARD_HISTORY_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 const CARD_INNER_MARGIN: f32 = 16.0;
 
 fn main() -> eframe::Result<()> {
@@ -70,6 +71,10 @@ struct NexkvmGui {
     command_output: String,
     clipboard_history: Vec<ClipboardHistoryEntry>,
     clipboard_history_loaded: bool,
+    clipboard_history_refresh_rx: Option<Receiver<Result<Vec<ClipboardHistoryEntry>, String>>>,
+    clipboard_history_refresh_announce: bool,
+    clipboard_history_observed_revision: Option<Option<ClipboardHistoryRevision>>,
+    clipboard_history_next_check: Instant,
     clipboard_clear_armed: bool,
     pending_file_sends: Vec<PendingFileSend>,
     notifications: VecDeque<GuiNotification>,
@@ -117,6 +122,12 @@ struct ClipboardHistoryWireEntry {
     bytes: u64,
     #[serde(default)]
     formats: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClipboardHistoryRevision {
+    bytes: u64,
+    modified_nanos: u128,
 }
 
 #[derive(Debug)]
@@ -222,6 +233,10 @@ impl NexkvmGui {
             command_output: String::new(),
             clipboard_history: Vec::new(),
             clipboard_history_loaded: false,
+            clipboard_history_refresh_rx: None,
+            clipboard_history_refresh_announce: false,
+            clipboard_history_observed_revision: None,
+            clipboard_history_next_check: Instant::now(),
             clipboard_clear_armed: false,
             pending_file_sends: Vec::new(),
             notifications,
@@ -642,40 +657,69 @@ impl NexkvmGui {
     }
 
     fn refresh_clipboard_history(&mut self) {
-        match Command::new(nexkvm_binary())
-            .args(["clipboard-history", "--json"])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                match parse_clipboard_history_json(&output.stdout) {
-                    Ok(entries) => {
-                        let count = entries.len();
-                        self.clipboard_history = entries;
-                        self.clipboard_history_loaded = true;
-                        self.clipboard_clear_armed = false;
-                        self.set_status(
-                            NotificationUrgency::Normal,
-                            "Clipboard history refreshed",
-                            format!("Loaded {count} clipboard history entries"),
-                        );
-                    }
-                    Err(_) => self.set_status(
-                        NotificationUrgency::High,
-                        "Clipboard history unavailable",
-                        "The clipboard-history command returned malformed JSON",
-                    ),
+        self.start_clipboard_history_refresh(true);
+    }
+
+    fn start_clipboard_history_refresh(&mut self, announce: bool) {
+        self.clipboard_history_refresh_announce |= announce;
+        if self.clipboard_history_refresh_rx.is_some() {
+            return;
+        }
+        let (result_tx, result_rx) = mpsc::channel();
+        let _ = thread::spawn(move || {
+            let _ = result_tx.send(load_clipboard_history());
+        });
+        self.clipboard_history_refresh_rx = Some(result_rx);
+    }
+
+    fn finish_clipboard_history_refresh(&mut self) {
+        let result = match self.clipboard_history_refresh_rx.as_ref() {
+            Some(receiver) => match receiver.try_recv() {
+                Ok(result) => result,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    Err("clipboard history worker stopped unexpectedly".to_string())
+                }
+            },
+            None => return,
+        };
+        self.clipboard_history_refresh_rx = None;
+        let announce = std::mem::take(&mut self.clipboard_history_refresh_announce);
+        match result {
+            Ok(entries) => {
+                let count = entries.len();
+                self.clipboard_history = entries;
+                self.clipboard_history_loaded = true;
+                self.clipboard_clear_armed = false;
+                if announce {
+                    self.set_status(
+                        NotificationUrgency::Normal,
+                        "Clipboard history refreshed",
+                        format!("Loaded {count} clipboard history entries"),
+                    );
                 }
             }
-            Ok(output) => self.set_status(
-                NotificationUrgency::High,
-                "Clipboard history failed",
-                format!("Clipboard history command exited: {}", output.status),
-            ),
-            Err(error) => self.set_status(
-                NotificationUrgency::High,
-                "Clipboard history failed",
-                format!("Could not start clipboard history command: {error}"),
-            ),
+            Err(error) if announce => {
+                self.set_status(NotificationUrgency::High, "Clipboard history failed", error)
+            }
+            Err(_) => {}
+        }
+    }
+
+    fn refresh_clipboard_history_automatically(&mut self) {
+        self.finish_clipboard_history_refresh();
+        if self.section != Section::Sharing || !self.config.clipboard.history_enabled {
+            return;
+        }
+        let now = Instant::now();
+        if now < self.clipboard_history_next_check {
+            return;
+        }
+        self.clipboard_history_next_check = now + CLIPBOARD_HISTORY_WATCH_INTERVAL;
+        let revision = clipboard_history_revision(&self.config_path);
+        if clipboard_history_refresh_needed(&mut self.clipboard_history_observed_revision, revision)
+        {
+            self.start_clipboard_history_refresh(false);
         }
     }
 
@@ -1054,9 +1098,12 @@ impl eframe::App for NexkvmGui {
         self.refresh_daemon_output();
         self.refresh_automatic_pairing();
         self.refresh_pending_file_sends();
+        self.refresh_clipboard_history_automatically();
         if self.daemon.is_some()
             || self.automatic_pairing.is_some()
             || !self.pending_file_sends.is_empty()
+            || self.clipboard_history_refresh_rx.is_some()
+            || (self.section == Section::Sharing && self.config.clipboard.history_enabled)
         {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
@@ -1639,7 +1686,9 @@ impl NexkvmGui {
             });
             ui.add_space(10.0);
             if !self.clipboard_history_loaded {
-                ui.label(muted_text("Refresh to load encrypted clipboard history."));
+                ui.label(muted_text(
+                    "Loading encrypted clipboard history automatically…",
+                ));
             } else if self.clipboard_history.is_empty() {
                 ui.label(muted_text("Clipboard history is empty."));
             }
@@ -2681,6 +2730,50 @@ fn parse_clipboard_history_json(contents: &[u8]) -> Result<Vec<ClipboardHistoryE
         .collect()
 }
 
+fn load_clipboard_history() -> Result<Vec<ClipboardHistoryEntry>, String> {
+    match Command::new(nexkvm_binary())
+        .args(["clipboard-history", "--json"])
+        .output()
+    {
+        Ok(output) if output.status.success() => parse_clipboard_history_json(&output.stdout),
+        Ok(output) => Err(format!(
+            "Clipboard history command exited: {}",
+            output.status
+        )),
+        Err(error) => Err(format!(
+            "Could not start clipboard history command: {error}"
+        )),
+    }
+}
+
+fn clipboard_history_revision(config_path: &std::path::Path) -> Option<ClipboardHistoryRevision> {
+    let archive_path = config_path
+        .parent()
+        .map(|parent| parent.join("clipboard-history.enc"))
+        .unwrap_or_else(|| PathBuf::from("clipboard-history.enc"));
+    let metadata = std::fs::metadata(archive_path).ok()?;
+    let modified_nanos = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos());
+    Some(ClipboardHistoryRevision {
+        bytes: metadata.len(),
+        modified_nanos,
+    })
+}
+
+fn clipboard_history_refresh_needed(
+    observed: &mut Option<Option<ClipboardHistoryRevision>>,
+    current: Option<ClipboardHistoryRevision>,
+) -> bool {
+    let changed = observed.as_ref() != Some(&current);
+    if changed {
+        *observed = Some(current);
+    }
+    changed
+}
+
 fn pairing_generation_feedback(
     success: bool,
     stdout: &[u8],
@@ -3542,6 +3635,54 @@ mod tests {
         assert_eq!(entries[0].preview, "private clipboard text");
         assert_eq!(entries[0].bytes, 22);
         assert!(!format!("{entries:?}").contains("private clipboard text"));
+    }
+
+    #[test]
+    fn clipboard_history_auto_refreshes_initially_and_after_archive_changes() {
+        let first = ClipboardHistoryRevision {
+            bytes: 128,
+            modified_nanos: 10,
+        };
+        let second = ClipboardHistoryRevision {
+            bytes: 256,
+            modified_nanos: 20,
+        };
+        let mut observed = None;
+
+        assert!(clipboard_history_refresh_needed(&mut observed, Some(first)));
+        assert!(!clipboard_history_refresh_needed(
+            &mut observed,
+            Some(first),
+        ));
+        assert!(clipboard_history_refresh_needed(
+            &mut observed,
+            Some(second),
+        ));
+        assert!(clipboard_history_refresh_needed(&mut observed, None));
+        assert!(!clipboard_history_refresh_needed(&mut observed, None));
+    }
+
+    #[test]
+    fn clipboard_history_revision_tracks_the_archive_beside_config() {
+        let unique = format!(
+            "nexkvm-gui-clipboard-watch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let directory = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&directory).unwrap();
+        let config_path = directory.join("config.toml");
+
+        assert_eq!(clipboard_history_revision(&config_path), None);
+        std::fs::write(directory.join("clipboard-history.enc"), b"archive").unwrap();
+        assert_eq!(
+            clipboard_history_revision(&config_path).map(|revision| revision.bytes),
+            Some(7),
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

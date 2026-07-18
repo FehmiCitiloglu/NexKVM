@@ -143,13 +143,15 @@ are excluded from synchronization and history. History is encrypted on local
 disk, but restored content becomes the active system clipboard and can be read
 by applications with clipboard access.
 
-History archives are local rather than bulk-replicated databases. A selection
-received through clipboard sync is added to the receiving Mac's history; when
-an older entry is restored, it becomes current and can then synchronize to the
-peer.
+History archives are local rather than bulk-replicated databases. Every copy is
+broadcast to all currently connected trusted peers, becomes the active system
+clipboard on each peer, and is added to each peer's local encrypted history.
+When an older entry is restored, it becomes current and synchronizes in the
+same way.
 
-Use **Sharing > Clipboard history > Refresh** to list entries and **Restore** to
-make one current. CLI equivalents are:
+Keep **Sharing** open to see clipboard history refresh automatically as local or
+remote copies arrive. **Refresh** remains available as a manual retry, and
+**Restore** makes an older entry current. CLI equivalents are:
 
 ```sh
 "$NEXKVM" clipboard-history

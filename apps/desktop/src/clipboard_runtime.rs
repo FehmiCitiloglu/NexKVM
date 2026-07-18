@@ -444,6 +444,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_local_copy_is_broadcast_to_every_connected_trusted_peer() {
+        let local = DeviceId::generate();
+        let clipboard = TestClipboard::new("copy to every trusted machine");
+        let first = TestConnection::new(key(5));
+        let second = TestConnection::new(key(6));
+        let mut first_sync = ClipboardSync::new(local, Box::new(PlaintextCipher));
+        let mut second_sync = ClipboardSync::new(local, Box::new(PlaintextCipher));
+
+        poll_and_send(&clipboard, &first, &mut first_sync)
+            .await
+            .unwrap();
+        poll_and_send(&clipboard, &second, &mut second_sync)
+            .await
+            .unwrap();
+
+        for connection in [&first, &second] {
+            let sent = connection.sent.lock().unwrap();
+            assert_eq!(sent.len(), 1);
+            let update = ClipboardUpdate::decode(sent[0].body.clone()).unwrap();
+            assert_eq!(update.origin, local);
+        }
+    }
+
+    #[tokio::test]
     async fn authenticated_peer_copy_becomes_local_selection_and_encrypted_history() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
