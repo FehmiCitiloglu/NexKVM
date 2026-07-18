@@ -15,9 +15,9 @@ use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, GetSystemMetrics, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    SetWindowsHookExW, ShowCursor, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
+    WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// Windows low-level hook event kinds relevant to input sharing.
@@ -192,7 +192,7 @@ impl WindowsInputCapture {
     }
 
     pub fn set_suppressed(&self, suppressed: bool) {
-        self.suppressed.store(suppressed, Ordering::SeqCst);
+        update_suppression(&self.suppressed, suppressed, set_native_cursor_hidden);
     }
 
     #[cfg(test)]
@@ -205,6 +205,25 @@ impl WindowsInputCapture {
             receiver: Arc::new(Mutex::new(receiver)),
             suppressed: Arc::new(AtomicBool::new(false)),
         }
+    }
+}
+
+fn update_suppression(
+    state: &AtomicBool,
+    suppressed: bool,
+    mut set_cursor_hidden: impl FnMut(bool),
+) {
+    if state.swap(suppressed, Ordering::SeqCst) != suppressed {
+        set_cursor_hidden(suppressed);
+    }
+}
+
+fn set_native_cursor_hidden(hidden: bool) {
+    // SAFETY: `ShowCursor` accepts a value parameter and retains no caller-owned
+    // memory. Calls are balanced by suppression state transitions so the Win32
+    // display counter is restored when focus returns to the source.
+    unsafe {
+        ShowCursor(i32::from(!hidden));
     }
 }
 
@@ -451,6 +470,19 @@ fn wheel_delta_from_mouse_data(mouse_data: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suppression_visibility_changes_only_on_focus_transitions() {
+        let state = AtomicBool::new(false);
+        let mut visibility = Vec::new();
+
+        update_suppression(&state, true, |hidden| visibility.push(hidden));
+        update_suppression(&state, true, |hidden| visibility.push(hidden));
+        update_suppression(&state, false, |hidden| visibility.push(hidden));
+        update_suppression(&state, false, |hidden| visibility.push(hidden));
+
+        assert_eq!(visibility, vec![true, false]);
+    }
 
     #[test]
     fn mouse_move_normalizes_to_pointer_move() {
