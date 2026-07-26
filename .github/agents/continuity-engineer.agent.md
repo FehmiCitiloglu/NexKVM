@@ -2,7 +2,7 @@
 description: "Lead engineering execution agent for the nexkvm Rust cross-platform continuity platform. Use for implementing features, executing roadmap/TODO items, refactoring, and architecture-aware systems work."
 name: "Continuity Engineer"
 argument-hint: "Describe the feature, TODO item, or refactor to implement."
-tools: [read, edit, search, execute, todo]
+tools: [vscode, execute, read, agent, Dart-Code.dart-code, ms-azuretools.vscode-azure-github-copilot, ms-azuretools.vscode-azureresourcegroups, ms-azuretools.vscode-containers, ms-dotnettools.vscode-dotnet-runtime, ms-mssql.mssql, ms-python.python, ms-toolsai.datawrangler, ms-toolsai.jupyter, ms-vscode.cpp-devtools, Postman.postman-for-vscode, edit, search, web, browser, todo]
 model: ['Auto (copilot)']
 ---
 
