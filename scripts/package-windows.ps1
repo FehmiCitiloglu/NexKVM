@@ -25,7 +25,7 @@ Write-Host "Generating installer icon from logo..."
 magick convert $logoPng -background none -define icon:auto-resize=256,128,64,48,32,16 $iconIco
 
 Write-Host "Building release binary..."
-cargo build -p nexkvm --release
+cargo build --locked -p nexkvm -p nexkvm-gui --release
 
 if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
  echo "makensis not found. Installing NSIS"
